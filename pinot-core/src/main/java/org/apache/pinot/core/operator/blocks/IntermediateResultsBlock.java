@@ -46,6 +46,8 @@ import org.apache.pinot.core.query.aggregation.function.AggregationFunction;
 import org.apache.pinot.core.query.aggregation.groupby.AggregationGroupByResult;
 import org.apache.pinot.core.query.selection.SelectionOperatorUtils;
 import org.apache.pinot.spi.utils.ByteArray;
+import org.apache.pinot.spi.utils.NullValueUtils;
+import org.roaringbitmap.RoaringBitmap;
 
 
 /**
@@ -54,6 +56,7 @@ import org.apache.pinot.spi.utils.ByteArray;
 @SuppressWarnings("rawtypes")
 public class IntermediateResultsBlock implements Block {
   private DataSchema _dataSchema;
+  private boolean _nullHandlingEnabled;
   private Collection<Object[]> _selectionResult;
   private AggregationFunction[] _aggregationFunctions;
   private List<Object> _aggregationResult;
@@ -66,11 +69,14 @@ public class IntermediateResultsBlock implements Block {
   private long _numTotalDocs;
   private int _numSegmentsProcessed;
   private int _numSegmentsMatched;
+  private int _numConsumingSegmentsProcessed;
+  private int _numConsumingSegmentsMatched;
   private boolean _numGroupsLimitReached;
   private int _numResizes;
   private long _resizeTimeMs;
   private long _executionThreadCpuTimeNs;
   private int _numServerThreads;
+  private boolean _queryHasMVSelectionOrderBy;
 
   private Table _table;
 
@@ -80,9 +86,11 @@ public class IntermediateResultsBlock implements Block {
   /**
    * Constructor for selection result.
    */
-  public IntermediateResultsBlock(DataSchema dataSchema, Collection<Object[]> selectionResult) {
+  public IntermediateResultsBlock(DataSchema dataSchema, Collection<Object[]> selectionResult,
+      boolean nullHandlingEnabled) {
     _dataSchema = dataSchema;
     _selectionResult = selectionResult;
+    _nullHandlingEnabled = nullHandlingEnabled;
   }
 
   /**
@@ -90,19 +98,23 @@ public class IntermediateResultsBlock implements Block {
    * <p>For aggregation only, the result is a list of values.
    * <p>For aggregation group-by, the result is a list of maps from group keys to aggregation values.
    */
-  public IntermediateResultsBlock(AggregationFunction[] aggregationFunctions, List<Object> aggregationResult) {
+  public IntermediateResultsBlock(AggregationFunction[] aggregationFunctions, List<Object> aggregationResult,
+      boolean nullHandlingEnabled) {
     _aggregationFunctions = aggregationFunctions;
     _aggregationResult = aggregationResult;
+    _nullHandlingEnabled = nullHandlingEnabled;
   }
 
   /**
    * Constructor for aggregation group-by order-by result with {@link AggregationGroupByResult}.
    */
   public IntermediateResultsBlock(AggregationFunction[] aggregationFunctions,
-      @Nullable AggregationGroupByResult aggregationGroupByResults, DataSchema dataSchema) {
+      @Nullable AggregationGroupByResult aggregationGroupByResults, DataSchema dataSchema,
+      boolean nullHandlingEnabled) {
     _aggregationFunctions = aggregationFunctions;
     _aggregationGroupByResult = aggregationGroupByResults;
     _dataSchema = dataSchema;
+    _nullHandlingEnabled = nullHandlingEnabled;
   }
 
   /**
@@ -110,15 +122,17 @@ public class IntermediateResultsBlock implements Block {
    * with a collection of intermediate records.
    */
   public IntermediateResultsBlock(AggregationFunction[] aggregationFunctions,
-      Collection<IntermediateRecord> intermediateRecords, DataSchema dataSchema) {
+      Collection<IntermediateRecord> intermediateRecords, DataSchema dataSchema, boolean nullHandlingEnabled) {
     _aggregationFunctions = aggregationFunctions;
     _dataSchema = dataSchema;
     _intermediateRecords = intermediateRecords;
+    _nullHandlingEnabled = nullHandlingEnabled;
   }
 
-  public IntermediateResultsBlock(Table table) {
+  public IntermediateResultsBlock(Table table, boolean nullHandlingEnabled) {
     _table = table;
     _dataSchema = table.getDataSchema();
+    _nullHandlingEnabled = nullHandlingEnabled;
   }
 
   /**
@@ -127,6 +141,7 @@ public class IntermediateResultsBlock implements Block {
   public IntermediateResultsBlock(ProcessingException processingException, Exception e) {
     _processingExceptions = new ArrayList<>();
     _processingExceptions.add(QueryException.getException(processingException, e));
+    _nullHandlingEnabled = false;
   }
 
   /**
@@ -263,6 +278,24 @@ public class IntermediateResultsBlock implements Block {
   }
 
   @VisibleForTesting
+  public int getNumConsumingSegmentsProcessed() {
+    return _numConsumingSegmentsProcessed;
+  }
+
+  public void setNumConsumingSegmentsProcessed(int numConsumingSegmentsProcessed) {
+    _numConsumingSegmentsProcessed = numConsumingSegmentsProcessed;
+  }
+
+  @VisibleForTesting
+  public int getNumConsumingSegmentsMatched() {
+    return _numConsumingSegmentsMatched;
+  }
+
+  public void setNumConsumingSegmentsMatched(int numConsumingSegmentsMatched) {
+    _numConsumingSegmentsMatched = numConsumingSegmentsMatched;
+  }
+
+  @VisibleForTesting
   public long getNumTotalDocs() {
     return _numTotalDocs;
   }
@@ -278,6 +311,14 @@ public class IntermediateResultsBlock implements Block {
 
   public void setNumGroupsLimitReached(boolean numGroupsLimitReached) {
     _numGroupsLimitReached = numGroupsLimitReached;
+  }
+
+  public boolean isQueryHasMVSelectionOrderBy() {
+    return _queryHasMVSelectionOrderBy;
+  }
+
+  public void setQueryHasMVSelectionOrderBy(boolean queryHasMVSelectionOrderBy) {
+    _queryHasMVSelectionOrderBy = queryHasMVSelectionOrderBy;
   }
 
   /**
@@ -311,16 +352,47 @@ public class IntermediateResultsBlock implements Block {
       throws IOException {
     DataTableBuilder dataTableBuilder = DataTableFactory.getDataTableBuilder(_dataSchema);
     ColumnDataType[] storedColumnDataTypes = _dataSchema.getStoredColumnDataTypes();
+    int numColumns = _dataSchema.size();
     Iterator<Record> iterator = _table.iterator();
-    while (iterator.hasNext()) {
-      Record record = iterator.next();
-      dataTableBuilder.startRow();
-      int columnIndex = 0;
-      for (Object value : record.getValues()) {
-        setDataTableColumn(storedColumnDataTypes[columnIndex], dataTableBuilder, columnIndex, value);
-        columnIndex++;
+    if (_nullHandlingEnabled) {
+      RoaringBitmap[] nullBitmaps = new RoaringBitmap[numColumns];
+      Object[] colDefaultNullValues = new Object[numColumns];
+      for (int colId = 0; colId < numColumns; colId++) {
+        if (storedColumnDataTypes[colId] != ColumnDataType.OBJECT) {
+          colDefaultNullValues[colId] =
+              NullValueUtils.getDefaultNullValue(storedColumnDataTypes[colId].toDataType());
+        }
+        nullBitmaps[colId] = new RoaringBitmap();
       }
-      dataTableBuilder.finishRow();
+      int rowId = 0;
+      while (iterator.hasNext()) {
+        Object[] values = iterator.next().getValues();
+        dataTableBuilder.startRow();
+        for (int columnIndex = 0; columnIndex < values.length; columnIndex++) {
+          Object value = values[columnIndex];
+          if (value == null) {
+            value = colDefaultNullValues[columnIndex];
+            nullBitmaps[columnIndex].add(rowId);
+          }
+          setDataTableColumn(storedColumnDataTypes[columnIndex], dataTableBuilder, columnIndex, value);
+        }
+        dataTableBuilder.finishRow();
+        rowId++;
+      }
+      for (int colId = 0; colId < numColumns; colId++) {
+        dataTableBuilder.setNullRowIds(nullBitmaps[colId]);
+      }
+    } else {
+      while (iterator.hasNext()) {
+        Record record = iterator.next();
+        dataTableBuilder.startRow();
+        int columnIndex = 0;
+        for (Object value : record.getValues()) {
+          setDataTableColumn(storedColumnDataTypes[columnIndex], dataTableBuilder, columnIndex, value);
+          columnIndex++;
+        }
+        dataTableBuilder.finishRow();
+      }
     }
     DataTable dataTable = dataTableBuilder.build();
     return attachMetadataToDataTable(dataTable);
@@ -376,7 +448,8 @@ public class IntermediateResultsBlock implements Block {
 
   private DataTable getSelectionResultDataTable()
       throws Exception {
-    return attachMetadataToDataTable(SelectionOperatorUtils.getDataTableFromRows(_selectionResult, _dataSchema));
+    return attachMetadataToDataTable(SelectionOperatorUtils.getDataTableFromRows(
+        _selectionResult, _dataSchema, _nullHandlingEnabled));
   }
 
   private DataTable getAggregationResultDataTable()
@@ -390,28 +463,75 @@ public class IntermediateResultsBlock implements Block {
       columnNames[i] = aggregationFunction.getColumnName();
       columnDataTypes[i] = aggregationFunction.getIntermediateResultColumnType();
     }
+    RoaringBitmap[] nullBitmaps = null;
+    Object[] colDefaultNullValues = null;
+    if (_nullHandlingEnabled) {
+      colDefaultNullValues = new Object[numAggregationFunctions];
+      nullBitmaps = new RoaringBitmap[numAggregationFunctions];
+      for (int i = 0; i < numAggregationFunctions; i++) {
+        if (columnDataTypes[i] != ColumnDataType.OBJECT) {
+          colDefaultNullValues[i] = NullValueUtils.getDefaultNullValue(columnDataTypes[i].toDataType());
+        }
+        nullBitmaps[i] = new RoaringBitmap();
+      }
+    }
 
     // Build the data table.
     DataTableBuilder dataTableBuilder =
         DataTableFactory.getDataTableBuilder(new DataSchema(columnNames, columnDataTypes));
     dataTableBuilder.startRow();
-    for (int i = 0; i < numAggregationFunctions; i++) {
-      switch (columnDataTypes[i]) {
-        case LONG:
-          dataTableBuilder.setColumn(i, ((Number) _aggregationResult.get(i)).longValue());
-          break;
-        case DOUBLE:
-          dataTableBuilder.setColumn(i, ((Double) _aggregationResult.get(i)).doubleValue());
-          break;
-        case OBJECT:
-          dataTableBuilder.setColumn(i, _aggregationResult.get(i));
-          break;
-        default:
-          throw new UnsupportedOperationException(
-              "Unsupported aggregation column data type: " + columnDataTypes[i] + " for column: " + columnNames[i]);
+    if (_nullHandlingEnabled) {
+      for (int i = 0; i < numAggregationFunctions; i++) {
+        Object value = _aggregationResult.get(i);
+        // OBJECT (e.g. DistinctTable) calls toBytes() (e.g. DistinctTable.toBytes()) which takes care of replacing
+        // nulls with default values, and building presence vector and serializing both.
+        if (columnDataTypes[i] != ColumnDataType.OBJECT) {
+          if (value == null) {
+            value = colDefaultNullValues[i];
+            nullBitmaps[i].add(0);
+          }
+        }
+
+        switch (columnDataTypes[i]) {
+          case LONG:
+            dataTableBuilder.setColumn(i, ((Number) value).longValue());
+            break;
+          case DOUBLE:
+            dataTableBuilder.setColumn(i, ((Double) value).doubleValue());
+            break;
+          case OBJECT:
+            dataTableBuilder.setColumn(i, value);
+            break;
+          default:
+            throw new UnsupportedOperationException(
+                "Unsupported aggregation column data type: " + columnDataTypes[i] + " for column: " + columnNames[i]);
+        }
+      }
+    } else {
+      for (int i = 0; i < numAggregationFunctions; i++) {
+        switch (columnDataTypes[i]) {
+          case LONG:
+            dataTableBuilder.setColumn(i, ((Number) _aggregationResult.get(i)).longValue());
+            break;
+          case DOUBLE:
+            dataTableBuilder.setColumn(i, ((Double) _aggregationResult.get(i)).doubleValue());
+            break;
+          case OBJECT:
+            dataTableBuilder.setColumn(i, _aggregationResult.get(i));
+            break;
+          default:
+            throw new UnsupportedOperationException(
+                "Unsupported aggregation column data type: " + columnDataTypes[i] + " for column: " + columnNames[i]);
+        }
       }
     }
+
     dataTableBuilder.finishRow();
+    if (_nullHandlingEnabled) {
+      for (int i = 0; i < numAggregationFunctions; i++) {
+        dataTableBuilder.setNullRowIds(nullBitmaps[i]);
+      }
+    }
     DataTable dataTable = dataTableBuilder.build();
 
     return attachMetadataToDataTable(dataTable);
@@ -429,6 +549,10 @@ public class IntermediateResultsBlock implements Block {
         .put(MetadataKey.NUM_ENTRIES_SCANNED_POST_FILTER.getName(), String.valueOf(_numEntriesScannedPostFilter));
     dataTable.getMetadata().put(MetadataKey.NUM_SEGMENTS_PROCESSED.getName(), String.valueOf(_numSegmentsProcessed));
     dataTable.getMetadata().put(MetadataKey.NUM_SEGMENTS_MATCHED.getName(), String.valueOf(_numSegmentsMatched));
+    dataTable.getMetadata().put(MetadataKey.NUM_CONSUMING_SEGMENTS_PROCESSED.getName(),
+        String.valueOf(_numConsumingSegmentsProcessed));
+    dataTable.getMetadata().put(MetadataKey.NUM_CONSUMING_SEGMENTS_MATCHED.getName(),
+        String.valueOf(_numConsumingSegmentsMatched));
     dataTable.getMetadata().put(MetadataKey.NUM_RESIZES.getName(), String.valueOf(_numResizes));
     dataTable.getMetadata().put(MetadataKey.RESIZE_TIME_MS.getName(), String.valueOf(_resizeTimeMs));
 

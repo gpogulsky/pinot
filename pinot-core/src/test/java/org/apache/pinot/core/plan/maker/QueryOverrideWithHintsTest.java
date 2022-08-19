@@ -94,6 +94,11 @@ public class QueryOverrideWithHintsTest {
     }
 
     @Override
+    public Object getValue(int docId, String column) {
+      return null;
+    }
+
+    @Override
     public void destroy() {
     }
   };

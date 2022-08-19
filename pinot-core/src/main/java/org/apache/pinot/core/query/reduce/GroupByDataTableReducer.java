@@ -51,6 +51,7 @@ import org.apache.pinot.core.query.request.context.QueryContext;
 import org.apache.pinot.core.transport.ServerRoutingInstance;
 import org.apache.pinot.core.util.GroupByUtils;
 import org.apache.pinot.core.util.trace.TraceRunnable;
+import org.roaringbitmap.RoaringBitmap;
 
 
 /**
@@ -147,12 +148,16 @@ public class GroupByDataTableReducer implements DataTableReducer {
     FilterContext havingFilter = _queryContext.getHavingFilter();
     if (havingFilter != null) {
       rows = new ArrayList<>();
-      HavingFilterHandler havingFilterHandler = new HavingFilterHandler(havingFilter, postAggregationHandler);
+      HavingFilterHandler havingFilterHandler = new HavingFilterHandler(havingFilter, postAggregationHandler,
+          _queryContext.isNullHandlingEnabled());
       while (rows.size() < limit && sortedIterator.hasNext()) {
         Object[] row = sortedIterator.next().getValues();
         extractFinalAggregationResults(row);
         for (int i = 0; i < numColumns; i++) {
-          row[i] = columnDataTypes[i].convert(row[i]);
+          Object value = row[i];
+          if (value != null) {
+            row[i] = columnDataTypes[i].convert(row[i]);
+          }
         }
         if (havingFilterHandler.isMatch(row)) {
           rows.add(row);
@@ -165,7 +170,10 @@ public class GroupByDataTableReducer implements DataTableReducer {
         Object[] row = sortedIterator.next().getValues();
         extractFinalAggregationResults(row);
         for (int j = 0; j < numColumns; j++) {
-          row[j] = columnDataTypes[j].convert(row[j]);
+          Object value = row[j];
+          if (value != null) {
+            row[j] = columnDataTypes[j].convert(row[j]);
+          }
         }
         rows.add(row);
       }
@@ -178,7 +186,10 @@ public class GroupByDataTableReducer implements DataTableReducer {
     for (Object[] row : rows) {
       Object[] resultRow = postAggregationHandler.getResult(row);
       for (int i = 0; i < numResultColumns; i++) {
-        resultRow[i] = resultColumnDataTypes[i].format(resultRow[i]);
+        Object value = resultRow[i];
+        if (value != null) {
+          resultRow[i] = resultColumnDataTypes[i].format(value);
+        }
       }
       resultRows.add(resultRow);
     }
@@ -266,6 +277,15 @@ public class GroupByDataTableReducer implements DataTableReducer {
               return;
             }
             try {
+              boolean nullHandlingEnabled = _queryContext.isNullHandlingEnabled();
+              RoaringBitmap[] nullBitmaps = null;
+              if (nullHandlingEnabled) {
+                nullBitmaps = new RoaringBitmap[_numColumns];
+                for (int i = 0; i < _numColumns; i++) {
+                  nullBitmaps[i] = dataTable.getNullRowIds(i);
+                }
+              }
+
               int numRows = dataTable.getNumberOfRows();
               for (int rowId = 0; rowId < numRows; rowId++) {
                 Object[] values = new Object[_numColumns];
@@ -298,6 +318,13 @@ public class GroupByDataTableReducer implements DataTableReducer {
                     // Add other aggregation intermediate result / group-by column type supports here
                     default:
                       throw new IllegalStateException();
+                  }
+                }
+                if (nullHandlingEnabled) {
+                  for (int colId = 0; colId < _numColumns; colId++) {
+                    if (nullBitmaps[colId] != null && nullBitmaps[colId].contains(rowId)) {
+                      values[colId] = null;
+                    }
                   }
                 }
                 indexedTable.upsert(new Record(values));

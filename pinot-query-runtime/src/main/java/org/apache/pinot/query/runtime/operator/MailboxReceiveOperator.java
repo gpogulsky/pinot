@@ -18,22 +18,28 @@
  */
 package org.apache.pinot.query.runtime.operator;
 
+import com.google.common.base.Preconditions;
 import java.nio.ByteBuffer;
+import java.util.Collections;
 import java.util.List;
 import javax.annotation.Nullable;
 import org.apache.calcite.rel.RelDistribution;
+import org.apache.pinot.common.exception.QueryException;
 import org.apache.pinot.common.proto.Mailbox;
 import org.apache.pinot.common.utils.DataSchema;
 import org.apache.pinot.core.common.Operator;
 import org.apache.pinot.core.common.datablock.BaseDataBlock;
 import org.apache.pinot.core.common.datablock.DataBlockUtils;
+import org.apache.pinot.core.common.datablock.MetadataBlock;
 import org.apache.pinot.core.operator.BaseOperator;
 import org.apache.pinot.core.transport.ServerInstance;
 import org.apache.pinot.query.mailbox.MailboxService;
 import org.apache.pinot.query.mailbox.ReceivingMailbox;
 import org.apache.pinot.query.mailbox.StringMailboxIdentifier;
+import org.apache.pinot.query.planner.partitioning.KeySelector;
 import org.apache.pinot.query.runtime.blocks.TransferableBlock;
 import org.apache.pinot.query.runtime.blocks.TransferableBlockUtils;
+import org.apache.pinot.query.service.QueryConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,26 +51,45 @@ import org.slf4j.LoggerFactory;
 public class MailboxReceiveOperator extends BaseOperator<TransferableBlock> {
   private static final Logger LOGGER = LoggerFactory.getLogger(MailboxReceiveOperator.class);
   private static final String EXPLAIN_NAME = "MAILBOX_RECEIVE";
-  private static final long DEFAULT_TIMEOUT_NANO = 10_000_000_000L;
 
   private final MailboxService<Mailbox.MailboxContent> _mailboxService;
   private final RelDistribution.Type _exchangeType;
+  private final KeySelector<Object[], Object[]> _keySelector;
   private final List<ServerInstance> _sendingStageInstances;
+  private final DataSchema _dataSchema;
   private final String _hostName;
   private final int _port;
   private final long _jobId;
   private final int _stageId;
+  private final long _timeout;
+  private TransferableBlock _upstreamErrorBlock;
 
-  public MailboxReceiveOperator(MailboxService<Mailbox.MailboxContent> mailboxService,
-      RelDistribution.Type exchangeType, List<ServerInstance> sendingStageInstances, String hostName, int port,
-      long jobId, int stageId) {
+  public MailboxReceiveOperator(MailboxService<Mailbox.MailboxContent> mailboxService, DataSchema dataSchema,
+      List<ServerInstance> sendingStageInstances, RelDistribution.Type exchangeType,
+      KeySelector<Object[], Object[]> keySelector, String hostName, int port, long jobId, int stageId) {
+    _dataSchema = dataSchema;
     _mailboxService = mailboxService;
     _exchangeType = exchangeType;
-    _sendingStageInstances = sendingStageInstances;
+    if (_exchangeType == RelDistribution.Type.SINGLETON) {
+      ServerInstance singletonInstance = null;
+      for (ServerInstance serverInstance : sendingStageInstances) {
+        if (serverInstance.getHostname().equals(_mailboxService.getHostname())
+            && serverInstance.getQueryMailboxPort() == _mailboxService.getMailboxPort()) {
+          Preconditions.checkState(singletonInstance == null, "multiple instance found for singleton exchange type!");
+          singletonInstance = serverInstance;
+        }
+      }
+      _sendingStageInstances = Collections.singletonList(singletonInstance);
+    } else {
+      _sendingStageInstances = sendingStageInstances;
+    }
     _hostName = hostName;
     _port = port;
     _jobId = jobId;
     _stageId = stageId;
+    _timeout = QueryConfig.DEFAULT_TIMEOUT_NANO;
+    _upstreamErrorBlock = null;
+    _keySelector = keySelector;
   }
 
   @Override
@@ -81,10 +106,12 @@ public class MailboxReceiveOperator extends BaseOperator<TransferableBlock> {
 
   @Override
   protected TransferableBlock getNextBlock() {
+    if (_upstreamErrorBlock != null) {
+      return _upstreamErrorBlock;
+    }
     // TODO: do a round robin check against all MailboxContentStreamObservers and find which one that has data.
     boolean hasOpenedMailbox = true;
-    DataSchema dataSchema = null;
-    long timeoutWatermark = System.nanoTime() + DEFAULT_TIMEOUT_NANO;
+    long timeoutWatermark = System.nanoTime() + _timeout;
     while (hasOpenedMailbox && System.nanoTime() < timeoutWatermark) {
       hasOpenedMailbox = false;
       for (ServerInstance sendingInstance : _sendingStageInstances) {
@@ -100,6 +127,10 @@ public class MailboxReceiveOperator extends BaseOperator<TransferableBlock> {
               ByteBuffer byteBuffer = mailboxContent.getPayload().asReadOnlyByteBuffer();
               if (byteBuffer.hasRemaining()) {
                 BaseDataBlock dataBlock = DataBlockUtils.getDataBlock(byteBuffer);
+                if (dataBlock instanceof MetadataBlock && !dataBlock.getExceptions().isEmpty()) {
+                  _upstreamErrorBlock = TransferableBlockUtils.getErrorTransferableBlock(dataBlock.getExceptions());
+                  return _upstreamErrorBlock;
+                }
                 if (dataBlock.getNumberOfRows() > 0) {
                   // here we only return data table block when it is not empty.
                   return new TransferableBlock(dataBlock);
@@ -114,10 +145,10 @@ public class MailboxReceiveOperator extends BaseOperator<TransferableBlock> {
     }
     if (System.nanoTime() >= timeoutWatermark) {
       LOGGER.error("Timed out after polling mailboxes: {}", _sendingStageInstances);
+      return TransferableBlockUtils.getErrorTransferableBlock(QueryException.EXECUTION_TIMEOUT_ERROR);
+    } else {
+      return TransferableBlockUtils.getEndOfStreamTransferableBlock(_dataSchema);
     }
-    // TODO: we need to at least return one data table with schema if there's no error.
-    // we need to condition this on whether there's already things being returned or not.
-    return TransferableBlockUtils.getEndOfStreamTransferableBlock();
   }
 
   public RelDistribution.Type getExchangeType() {

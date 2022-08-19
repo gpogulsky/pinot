@@ -87,6 +87,11 @@ public interface IndexSegment {
   GenericRow getRecord(int docId, GenericRow reuse);
 
   /**
+   * Returns the value for the column at the document id. Returns byte[] for BYTES data type.
+   */
+  Object getValue(int docId, String column);
+
+  /**
    * Hints the segment to begin prefetching buffers for specified columns.
    * Typically, this should be an async call made before operating on the segment.
    * @param fetchContext context for this segment's fetch

@@ -33,6 +33,7 @@
   <url>https://pinot.apache.org/</url>
   <properties>
     <pinot.root>${basedir}/..</pinot.root>
+    <npm.script>build</npm.script>
   </properties>
   <dependencies>
     <dependency>
@@ -138,20 +139,8 @@
       <artifactId>swagger-jaxrs</artifactId>
       <exclusions>
         <exclusion>
-          <groupId>com.fasterxml.jackson.jaxrs</groupId>
-          <artifactId>jackson-jaxrs-json-provider</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>com.fasterxml.jackson.module</groupId>
-          <artifactId>jackson-module-jaxb-annotations</artifactId>
-        </exclusion>
-        <exclusion>
           <groupId>javax.ws.rs</groupId>
           <artifactId>jsr311-api</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>com.fasterxml.jackson.core</groupId>
-          <artifactId>jackson-databind</artifactId>
         </exclusion>
       </exclusions>
     </dependency>
@@ -256,7 +245,7 @@
             </configuration>
           </execution>
           <execution>
-            <id>npm run-script build</id>
+            <id>npm run-script ${npm.script}</id>
             <goals>
               <goal>npm</goal>
             </goals>
@@ -265,7 +254,7 @@
             <configuration>
               <!-- optional: if not specified, it will run gulp's default task
                   (and you can remove this whole <configuration> section.) -->
-              <arguments>run-script build</arguments>
+              <arguments>run-script ${npm.script}</arguments>
               <!--arguments>build</arguments-->
             </configuration>
           </execution>

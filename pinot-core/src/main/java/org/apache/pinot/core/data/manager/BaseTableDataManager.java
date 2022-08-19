@@ -38,8 +38,8 @@ import org.apache.commons.configuration.ConfigurationConverter;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.helix.HelixManager;
-import org.apache.helix.ZNRecord;
 import org.apache.helix.store.zk.ZkHelixPropertyStore;
+import org.apache.helix.zookeeper.datamodel.ZNRecord;
 import org.apache.pinot.common.auth.AuthProviderUtils;
 import org.apache.pinot.common.metadata.ZKMetadataProvider;
 import org.apache.pinot.common.metadata.segment.SegmentZKMetadata;
@@ -122,7 +122,9 @@ public abstract class BaseTableDataManager implements TableDataManager {
     _indexDir = new File(_tableDataDir);
     if (!_indexDir.exists()) {
       Preconditions.checkState(_indexDir.mkdirs(),
-          "Unable to create index directory at %s. Check that the user has permissions on this directory.", _indexDir);
+          "Unable to create index directory at %s. "
+              + "Please check for available space and write-permissions for this directory.",
+          _indexDir);
     }
     _resourceTmpDir = new File(_indexDir, "tmp");
     // This is meant to cleanup temp resources from TableDataManager. But other code using this same
@@ -130,7 +132,8 @@ public abstract class BaseTableDataManager implements TableDataManager {
     FileUtils.deleteQuietly(_resourceTmpDir);
     if (!_resourceTmpDir.exists()) {
       Preconditions.checkState(_resourceTmpDir.mkdirs(),
-          "Unable to create temp resources directory at %s. Check that the user has permissions on this directory.",
+          "Unable to create temp resources directory at %s. "
+              + "Please check for available space and write-permissions for this directory.",
           _resourceTmpDir);
     }
     _errorCache = errorCache;
@@ -648,7 +651,8 @@ public abstract class BaseTableDataManager implements TableDataManager {
           zkMetadata.getCrc());
       return true;
     } catch (Exception e) {
-      LOGGER.error("Failed to load existing segment: {} of table: {} with crc: {}", segmentName, _tableNameWithType, e);
+      LOGGER.error("Failed to load existing segment: {} of table: {} with crc: {}", segmentName, _tableNameWithType,
+          zkMetadata.getCrc(), e);
       closeSegmentDirectoryQuietly(segmentDirectory);
       return false;
     }

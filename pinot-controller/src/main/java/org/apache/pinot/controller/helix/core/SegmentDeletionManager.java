@@ -37,10 +37,10 @@ import javax.annotation.Nullable;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.helix.AccessOption;
 import org.apache.helix.HelixAdmin;
-import org.apache.helix.ZNRecord;
 import org.apache.helix.model.ExternalView;
 import org.apache.helix.model.IdealState;
 import org.apache.helix.store.zk.ZkHelixPropertyStore;
+import org.apache.helix.zookeeper.datamodel.ZNRecord;
 import org.apache.pinot.common.metadata.ZKMetadataProvider;
 import org.apache.pinot.common.utils.SegmentName;
 import org.apache.pinot.common.utils.URIUtils;
@@ -335,7 +335,7 @@ public class SegmentDeletionManager {
   }
 
   @Nullable
-  private static Long getRetentionMsFromTableConfig(@Nullable TableConfig tableConfig) {
+  public static Long getRetentionMsFromTableConfig(@Nullable TableConfig tableConfig) {
     if (tableConfig != null) {
       SegmentsValidationAndRetentionConfig validationConfig = tableConfig.getValidationConfig();
       if (!StringUtils.isEmpty(validationConfig.getDeletedSegmentsRetentionPeriod())) {

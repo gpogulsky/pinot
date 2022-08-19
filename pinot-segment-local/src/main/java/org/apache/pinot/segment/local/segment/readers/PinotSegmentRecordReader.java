@@ -230,6 +230,10 @@ public class PinotSegmentRecordReader implements RecordReader {
     }
   }
 
+  public Object getValue(int docId, String column) {
+    return _columnReaderMap.get(column).getValue(docId);
+  }
+
   @Override
   public void rewind() {
     _nextDocId = 0;

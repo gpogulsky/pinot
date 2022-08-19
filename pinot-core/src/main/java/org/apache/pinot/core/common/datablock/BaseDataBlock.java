@@ -27,10 +27,12 @@ import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.Map;
+import javax.annotation.Nullable;
 import org.apache.pinot.common.response.ProcessingException;
 import org.apache.pinot.common.utils.DataSchema;
 import org.apache.pinot.common.utils.DataTable;
 import org.apache.pinot.core.common.ObjectSerDeUtils;
+import org.apache.pinot.core.common.datatable.DataTableFactory;
 import org.apache.pinot.core.common.datatable.DataTableUtils;
 import org.apache.pinot.core.query.request.context.ThreadTimer;
 import org.apache.pinot.spi.utils.BigDecimalUtils;
@@ -100,11 +102,11 @@ public abstract class BaseDataBlock implements DataTable {
    * @param fixedSizeDataBytes byte[] for fix-sized columns.
    * @param variableSizeDataBytes byte[] for variable length columns (arrays).
    */
-  public BaseDataBlock(int numRows, DataSchema dataSchema, String[] stringDictionary,
+  public BaseDataBlock(int numRows, @Nullable DataSchema dataSchema, String[] stringDictionary,
       byte[] fixedSizeDataBytes, byte[] variableSizeDataBytes) {
     _numRows = numRows;
-    _numColumns = dataSchema.size();
     _dataSchema = dataSchema;
+    _numColumns = dataSchema == null ? 0 : dataSchema.size();
     _stringDictionary = stringDictionary;
     _fixedSizeDataBytes = fixedSizeDataBytes;
     _fixedSizeData = ByteBuffer.wrap(fixedSizeDataBytes);
@@ -200,6 +202,11 @@ public abstract class BaseDataBlock implements DataTable {
     }
   }
 
+  @Override
+  public int getVersion() {
+    return DataTableFactory.VERSION_4;
+  }
+
   /**
    * Return the int serialized form of the data block version and type.
    * @return
@@ -239,6 +246,7 @@ public abstract class BaseDataBlock implements DataTable {
     return _numRows;
   }
 
+  @Nullable
   @Override
   public RoaringBitmap getNullRowIds(int colId) {
     return null;
@@ -531,7 +539,7 @@ public abstract class BaseDataBlock implements DataTable {
         continue;
       }
       String value = entry.getValue();
-      dataOutputStream.writeInt(key.ordinal());
+      dataOutputStream.writeInt(key.getId());
       if (key.getValueType() == MetadataValueType.INT) {
         dataOutputStream.write(Ints.toByteArray(Integer.parseInt(value)));
       } else if (key.getValueType() == MetadataValueType.LONG) {
@@ -562,7 +570,7 @@ public abstract class BaseDataBlock implements DataTable {
     Map<String, String> metadata = new HashMap<>();
     for (int i = 0; i < numEntries; i++) {
       int keyId = buffer.getInt();
-      MetadataKey key = MetadataKey.getByOrdinal(keyId);
+      MetadataKey key = MetadataKey.getById(keyId);
       // Ignore unknown keys.
       if (key == null) {
         continue;

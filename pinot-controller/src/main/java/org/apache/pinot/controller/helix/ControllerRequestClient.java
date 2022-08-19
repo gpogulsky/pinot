@@ -24,6 +24,7 @@ import java.net.URL;
 import org.apache.pinot.common.exception.HttpErrorStatusException;
 import org.apache.pinot.common.utils.SimpleHttpResponse;
 import org.apache.pinot.common.utils.http.HttpClient;
+import org.apache.pinot.controller.api.resources.PauseStatus;
 import org.apache.pinot.spi.config.table.TableConfig;
 import org.apache.pinot.spi.config.table.TableType;
 import org.apache.pinot.spi.config.tenant.Tenant;
@@ -139,6 +140,26 @@ public class ControllerRequestClient {
     }
   }
 
+  public void resetTable(String tableNameWithType, String targetInstance)
+      throws IOException {
+    try {
+      HttpClient.wrapAndThrowHttpException(_httpClient.sendJsonPostRequest(new URL(
+          _controllerRequestURLBuilder.forTableReset(tableNameWithType, targetInstance)).toURI(), null));
+    } catch (HttpErrorStatusException | URISyntaxException e) {
+      throw new IOException(e);
+    }
+  }
+
+  public void resetSegment(String tableNameWithType, String segmentName, String targetInstance)
+      throws IOException {
+    try {
+      HttpClient.wrapAndThrowHttpException(_httpClient.sendJsonPostRequest(new URL(
+          _controllerRequestURLBuilder.forSegmentReset(tableNameWithType, segmentName, targetInstance)).toURI(), null));
+    } catch (HttpErrorStatusException | URISyntaxException e) {
+      throw new IOException(e);
+    }
+  }
+
   public void reloadTable(String tableName, TableType tableType, boolean forceDownload)
       throws IOException {
     try {
@@ -164,6 +185,39 @@ public class ControllerRequestClient {
     try {
       HttpClient.wrapAndThrowHttpException(_httpClient.sendDeleteRequest(new URL(
           _controllerRequestURLBuilder.forSegmentDeleteAll(tableName, tableType.toString())).toURI()));
+    } catch (HttpErrorStatusException | URISyntaxException e) {
+      throw new IOException(e);
+    }
+  }
+
+  public PauseStatus pauseConsumption(String tableName)
+      throws IOException {
+    try {
+      SimpleHttpResponse response = HttpClient.wrapAndThrowHttpException(_httpClient.sendJsonPostRequest(new URL(
+          _controllerRequestURLBuilder.forPauseConsumption(tableName)).toURI(), null));
+      return JsonUtils.stringToObject(response.getResponse(), PauseStatus.class);
+    } catch (HttpErrorStatusException | URISyntaxException e) {
+      throw new IOException(e);
+    }
+  }
+
+  public PauseStatus resumeConsumption(String tableName)
+      throws IOException {
+    try {
+      SimpleHttpResponse response = HttpClient.wrapAndThrowHttpException(_httpClient.sendJsonPostRequest(new URL(
+          _controllerRequestURLBuilder.forResumeConsumption(tableName)).toURI(), null));
+      return JsonUtils.stringToObject(response.getResponse(), PauseStatus.class);
+    } catch (HttpErrorStatusException | URISyntaxException e) {
+      throw new IOException(e);
+    }
+  }
+
+  public PauseStatus getPauseStatus(String tableName)
+      throws IOException {
+    try {
+      SimpleHttpResponse response = HttpClient.wrapAndThrowHttpException(_httpClient.sendGetRequest(new URL(
+          _controllerRequestURLBuilder.forPauseStatus(tableName)).toURI()));
+      return JsonUtils.stringToObject(response.getResponse(), PauseStatus.class);
     } catch (HttpErrorStatusException | URISyntaxException e) {
       throw new IOException(e);
     }

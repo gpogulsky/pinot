@@ -137,8 +137,7 @@ public class ImmutableSegmentImpl implements ImmutableSegment {
   public DataSource getDataSource(String column) {
     DataSource result = _dataSources.get(column);
     Preconditions.checkNotNull(result,
-        "DataSource for %s should not be null. Potentially invalid column name specified.",
-        column);
+        "DataSource for %s should not be null. Potentially invalid column name specified.", column);
     return result;
   }
 
@@ -231,6 +230,19 @@ public class ImmutableSegmentImpl implements ImmutableSegment {
       return reuse;
     } catch (Exception e) {
       throw new RuntimeException("Failed to use PinotSegmentRecordReader to read immutable segment");
+    }
+  }
+
+  @Override
+  public Object getValue(int docId, String column) {
+    try {
+      if (_pinotSegmentRecordReader == null) {
+        _pinotSegmentRecordReader = new PinotSegmentRecordReader();
+        _pinotSegmentRecordReader.init(this);
+      }
+      return _pinotSegmentRecordReader.getValue(docId, column);
+    } catch (Exception e) {
+      throw new RuntimeException("Failed to use PinotSegmentRecordReader to read value from immutable segment");
     }
   }
 }

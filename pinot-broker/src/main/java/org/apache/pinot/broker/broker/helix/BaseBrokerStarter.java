@@ -32,11 +32,11 @@ import org.apache.helix.HelixManager;
 import org.apache.helix.HelixManagerFactory;
 import org.apache.helix.InstanceType;
 import org.apache.helix.SystemPropertyKeys;
-import org.apache.helix.ZNRecord;
 import org.apache.helix.model.IdealState;
 import org.apache.helix.model.InstanceConfig;
 import org.apache.helix.model.Message;
 import org.apache.helix.store.zk.ZkHelixPropertyStore;
+import org.apache.helix.zookeeper.datamodel.ZNRecord;
 import org.apache.pinot.broker.broker.AccessControlFactory;
 import org.apache.pinot.broker.broker.BrokerAdminApiApplication;
 import org.apache.pinot.broker.queryquota.HelixExternalViewBasedQueryQuotaManager;
@@ -273,7 +273,7 @@ public abstract class BaseBrokerStarter implements ServiceStartable {
       }
     }
 
-    MultiStageBrokerRequestHandler multiStageBrokerRequestHandler = null;
+    BrokerRequestHandler multiStageBrokerRequestHandler = null;
     if (_brokerConf.getProperty(Helix.CONFIG_OF_MULTI_STAGE_ENGINE_ENABLED, Helix.DEFAULT_MULTI_STAGE_ENGINE_ENABLED)) {
       // multi-stage request handler uses both Netty and GRPC ports.
       // worker requires both the "Netty port" for protocol transport; and "GRPC port" for mailbox transport.
@@ -284,7 +284,7 @@ public abstract class BaseBrokerStarter implements ServiceStartable {
     }
 
     _brokerRequestHandler = new BrokerRequestHandlerDelegate(singleStageBrokerRequestHandler,
-        multiStageBrokerRequestHandler);
+        multiStageBrokerRequestHandler, _brokerMetrics);
     _brokerRequestHandler.start();
     String controllerUrl = _brokerConf.getProperty(Broker.CONTROLLER_URL);
     if (controllerUrl != null) {

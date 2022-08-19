@@ -48,8 +48,7 @@ public class DataBlockTest {
 
     BaseDataBlock dataBlock = DataBlockUtils.getErrorDataBlock(originalException);
     dataBlock.addException(processingException);
-    Assert.assertEquals(dataBlock.getDataSchema().getColumnNames().length, 0);
-    Assert.assertEquals(dataBlock.getDataSchema().getColumnDataTypes().length, 0);
+    Assert.assertNull(dataBlock.getDataSchema());
     Assert.assertEquals(dataBlock.getNumberOfRows(), 0);
 
     // Assert processing exception and original exception both matches.
@@ -82,7 +81,7 @@ public class DataBlockTest {
         columnDataTypes.toArray(new DataSchema.ColumnDataType[0]));
     List<Object[]> rows = DataBlockTestUtils.getRandomRows(dataSchema, TEST_ROW_COUNT);
     DataTableFactory.setDataTableVersion(DataTableFactory.VERSION_4);
-    DataTable dataTableImpl = SelectionOperatorUtils.getDataTableFromRows(rows, dataSchema);
+    DataTable dataTableImpl = SelectionOperatorUtils.getDataTableFromRows(rows, dataSchema, false);
     DataTable dataBlockFromDataTable = DataBlockUtils.getDataBlock(ByteBuffer.wrap(dataTableImpl.toBytes()));
 
     for (int rowId = 0; rowId < TEST_ROW_COUNT; rowId++) {

@@ -25,10 +25,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
-import org.I0Itec.zkclient.exception.ZkBadVersionException;
 import org.apache.helix.AccessOption;
-import org.apache.helix.ZNRecord;
 import org.apache.helix.store.zk.ZkHelixPropertyStore;
+import org.apache.helix.zookeeper.datamodel.ZNRecord;
+import org.apache.helix.zookeeper.zkclient.exception.ZkBadVersionException;
 import org.apache.pinot.common.metadata.instance.InstanceZKMetadata;
 import org.apache.pinot.common.metadata.segment.SegmentZKMetadata;
 import org.apache.pinot.common.utils.SchemaUtils;
@@ -55,6 +55,7 @@ public class ZKMetadataProvider {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(ZKMetadataProvider.class);
   private static final String CLUSTER_TENANT_ISOLATION_ENABLED_KEY = "tenantIsolationEnabled";
+  private static final String PROPERTYSTORE_CONTROLLER_JOBS_PREFIX = "/CONTROLLER_JOBS";
   private static final String PROPERTYSTORE_SEGMENTS_PREFIX = "/SEGMENTS";
   private static final String PROPERTYSTORE_SCHEMAS_PREFIX = "/SCHEMAS";
   private static final String PROPERTYSTORE_INSTANCE_PARTITIONS_PREFIX = "/INSTANCE_PARTITIONS";
@@ -107,6 +108,10 @@ public class ZKMetadataProvider {
 
   public static String constructPropertyStorePathForInstancePartitions(String instancePartitionsName) {
     return StringUtil.join("/", PROPERTYSTORE_INSTANCE_PARTITIONS_PREFIX, instancePartitionsName);
+  }
+
+  public static String constructPropertyStorePathForControllerJob() {
+    return StringUtil.join("/", PROPERTYSTORE_CONTROLLER_JOBS_PREFIX);
   }
 
   public static String constructPropertyStorePathForResource(String resourceName) {

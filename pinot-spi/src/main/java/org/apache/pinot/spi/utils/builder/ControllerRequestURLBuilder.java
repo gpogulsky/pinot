@@ -223,6 +223,15 @@ public class ControllerRequestURLBuilder {
     return StringUtil.join("/", _baseUrl, "segments", tableName, query);
   }
 
+  public String forTableReset(String tableNameWithType, @Nullable String targetInstance) {
+    String query = targetInstance == null ? "reset" : String.format("reset?targetInstance=%s", targetInstance);
+    return StringUtil.join("/", _baseUrl, "segments", tableNameWithType, query);
+  }
+
+  public String forControllerJobStatus(String jobId) {
+    return StringUtil.join("/", _baseUrl, "segments", "segmentReloadStatus", jobId);
+  }
+
   public String forTableSize(String tableName) {
     return StringUtil.join("/", _baseUrl, "tables", tableName, "size");
   }
@@ -310,6 +319,11 @@ public class ControllerRequestURLBuilder {
   public String forSegmentReload(String tableName, String segmentName, boolean forceDownload) {
     return StringUtil.join("/", _baseUrl, "segments", tableName, encode(segmentName),
         "reload?forceDownload=" + forceDownload);
+  }
+
+  public String forSegmentReset(String tableNameWithType, String segmentName, String targetInstance) {
+    String query = targetInstance == null ? "reset" : String.format("reset?targetInstance=%s", targetInstance);
+    return StringUtil.join("/", _baseUrl, "segments", tableNameWithType, encode(segmentName), query);
   }
 
   public String forSegmentDownload(String tableName, String segmentName) {
@@ -457,6 +471,18 @@ public class ControllerRequestURLBuilder {
   public String forUpsertTableHeapEstimation(long cardinality, int primaryKeySize, int numPartitions) {
     return StringUtil.join("/", _baseUrl, "upsert/estimateHeapUsage",
         "?cardinality=" + cardinality + "&primaryKeySize=" + primaryKeySize + "&numPartitions=" + numPartitions);
+  }
+
+  public String forPauseConsumption(String tableName) {
+    return StringUtil.join("/", _baseUrl, "tables", tableName, "pauseConsumption");
+  }
+
+  public String forResumeConsumption(String tableName) {
+    return StringUtil.join("/", _baseUrl, "tables", tableName, "resumeConsumption");
+  }
+
+  public String forPauseStatus(String tableName) {
+    return StringUtil.join("/", _baseUrl, "tables", tableName, "pauseStatus");
   }
 
   private static String encode(String s) {
