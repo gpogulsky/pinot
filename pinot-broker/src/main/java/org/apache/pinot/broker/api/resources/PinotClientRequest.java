@@ -58,12 +58,12 @@ import org.apache.pinot.common.metrics.BrokerMeter;
 import org.apache.pinot.common.metrics.BrokerMetrics;
 import org.apache.pinot.common.response.BrokerResponse;
 import org.apache.pinot.common.response.broker.BrokerResponseNative;
+import org.apache.pinot.common.utils.request.RequestUtils;
 import org.apache.pinot.core.query.executor.sql.SqlQueryExecutor;
 import org.apache.pinot.spi.trace.RequestScope;
 import org.apache.pinot.spi.trace.Tracing;
 import org.apache.pinot.spi.utils.CommonConstants.Broker.Request;
 import org.apache.pinot.spi.utils.JsonUtils;
-import org.apache.pinot.sql.parsers.CalciteSqlParser;
 import org.apache.pinot.sql.parsers.PinotSqlType;
 import org.apache.pinot.sql.parsers.SqlNodeAndOptions;
 import org.glassfish.jersey.server.ManagedAsync;
@@ -190,8 +190,8 @@ public class PinotClientRequest {
   @GET
   @Path("queries")
   @Produces(MediaType.APPLICATION_JSON)
-  @ApiOperation(value = "Get queryIds of the running queries submitted via the requested broker", notes = "The id is "
-      + "assigned by the requested broker and only unique at the scope of this broker")
+  @ApiOperation(value = "Get running queries submitted via the requested broker", notes = "The id is assigned by the "
+      + "requested broker and only unique at the scope of this broker")
   @ApiResponses(value = {
       @ApiResponse(code = 200, message = "Success"), @ApiResponse(code = 500, message = "Internal server error")
   })
@@ -209,7 +209,7 @@ public class PinotClientRequest {
       throws Exception {
     SqlNodeAndOptions sqlNodeAndOptions;
     try {
-      sqlNodeAndOptions = CalciteSqlParser.compileToSqlNodeAndOptions(sqlRequestJson.get(Request.SQL).asText());
+      sqlNodeAndOptions = RequestUtils.parseQuery(sqlRequestJson.get(Request.SQL).asText(), sqlRequestJson);
     } catch (Exception e) {
       return new BrokerResponseNative(QueryException.getException(QueryException.SQL_PARSING_ERROR, e));
     }
