@@ -35,6 +35,7 @@
   <url>https://pinot.apache.org/</url>
   <properties>
     <pinot.root>${basedir}/../../..</pinot.root>
+    <proto.version>3.20.1</proto.version>
     <kafka.lib.version>2.8.1</kafka.lib.version>
     <testcontainers.version>1.17.3</testcontainers.version>
     <phase.prop>package</phase.prop>
@@ -53,6 +54,7 @@
     <dependency>
       <groupId>com.google.protobuf</groupId>
       <artifactId>protobuf-java</artifactId>
+      <version>${proto.version}</version>
     </dependency>
     <dependency>
       <groupId>com.github.os72</groupId>
@@ -160,7 +162,7 @@
         <artifactId>protobuf-maven-plugin</artifactId>
         <version>0.6.1</version>
         <configuration>
-          <protocArtifact>com.google.protobuf:protoc:3.11.4:exe:${os.detected.classifier}</protocArtifact>
+          <protocArtifact>com.google.protobuf:protoc:${proto.version}:exe:${os.detected.classifier}</protocArtifact>
           <protoTestSourceRoot>${basedir}/src/test/resources</protoTestSourceRoot>
         </configuration>
         <executions>

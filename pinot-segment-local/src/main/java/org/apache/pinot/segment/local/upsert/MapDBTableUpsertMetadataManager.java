@@ -27,20 +27,20 @@ import javax.annotation.concurrent.ThreadSafe;
  * Implementation of {@link TableUpsertMetadataManager} that is backed by a {@link ConcurrentHashMap}.
  */
 @ThreadSafe
-public class ConcurrentMapTableUpsertMetadataManager extends BaseTableUpsertMetadataManager {
-  private final Map<Integer, ConcurrentMapPartitionUpsertMetadataManager> _partitionMetadataManagerMap =
+public class MapDBTableUpsertMetadataManager extends BaseTableUpsertMetadataManager {
+  private final Map<Integer, MapDBPartitionUpsertMetadataManager> _partitionMetadataManagerMap =
       new ConcurrentHashMap<>();
 
   @Override
   public PartitionUpsertMetadataManager getOrCreatePartitionManager(int partitionId) {
     return _partitionMetadataManagerMap.computeIfAbsent(partitionId,
-        k -> new ConcurrentMapPartitionUpsertMetadataManager(_tableNameWithType, k, _primaryKeyColumns,
+        k -> new MapDBPartitionUpsertMetadataManager(_tableNameWithType, k, _primaryKeyColumns,
             _comparisonColumn, _hashFunction, _partialUpsertHandler, _serverMetrics));
   }
 
   @Override
   public void close() {
-    for (ConcurrentMapPartitionUpsertMetadataManager partitionUpsertMetadataManager
+    for (MapDBPartitionUpsertMetadataManager partitionUpsertMetadataManager
         : _partitionMetadataManagerMap.values()) {
       partitionUpsertMetadataManager.close();
     }
