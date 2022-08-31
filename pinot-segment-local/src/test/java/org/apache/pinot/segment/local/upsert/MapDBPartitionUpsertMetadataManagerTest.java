@@ -55,15 +55,13 @@ public class MapDBPartitionUpsertMetadataManagerTest {
 
   @Test
   public void testAddReplaceRemoveSegment() {
-    verifyAddReplaceRemoveSegment(HashFunction.NONE);
-//    verifyAddReplaceRemoveSegment(HashFunction.MD5);
-//    verifyAddReplaceRemoveSegment(HashFunction.MURMUR3);
+    verifyAddReplaceRemoveSegment();
   }
 
-  private void verifyAddReplaceRemoveSegment(HashFunction hashFunction) {
+  private void verifyAddReplaceRemoveSegment() {
     MapDBPartitionUpsertMetadataManager upsertMetadataManager =
         new MapDBPartitionUpsertMetadataManager(REALTIME_TABLE_NAME, 0, Collections.singletonList("pk"),
-            "timeCol", hashFunction, null, mock(ServerMetrics.class));
+            "timeCol", HashFunction.NONE, null, mock(ServerMetrics.class));
     //Map<Object, RecordLocation> recordLocationMap = upsertMetadataManager._primaryKeyToRecordLocationMap;
     Map<PrimaryKey, RecordLocation> recordLocationMap = upsertMetadataManager._primaryKeyToRecordLocationMap;
     recordLocationMap.clear();
@@ -233,15 +231,13 @@ public class MapDBPartitionUpsertMetadataManagerTest {
 
   @Test
   public void testAddRecord() {
-    verifyAddRecord(HashFunction.NONE);
-//    verifyAddRecord(HashFunction.MD5);
-//    verifyAddRecord(HashFunction.MURMUR3);
+    verifyAddRecord();
   }
 
-  private void verifyAddRecord(HashFunction hashFunction) {
+  private void verifyAddRecord() {
     MapDBPartitionUpsertMetadataManager upsertMetadataManager =
         new MapDBPartitionUpsertMetadataManager(REALTIME_TABLE_NAME, 0, Collections.singletonList("pk"),
-            "timeCol", hashFunction, null, mock(ServerMetrics.class));
+            "timeCol", HashFunction.NONE, null, mock(ServerMetrics.class));
     //Map<Object, RecordLocation> recordLocationMap = upsertMetadataManager._primaryKeyToRecordLocationMap;
     Map<PrimaryKey, RecordLocation> recordLocationMap = upsertMetadataManager._primaryKeyToRecordLocationMap;
     recordLocationMap.clear();

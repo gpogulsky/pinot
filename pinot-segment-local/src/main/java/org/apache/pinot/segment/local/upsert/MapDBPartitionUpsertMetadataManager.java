@@ -64,6 +64,7 @@ public class MapDBPartitionUpsertMetadataManager implements PartitionUpsertMetad
 
   private final String _tableNameWithType;
   private final int _partitionId;
+  private final String _tableNameWithPartition;
   private final List<String> _primaryKeyColumns;
   private final String _comparisonColumn;
   private final HashFunction _hashFunction;
@@ -92,6 +93,7 @@ public class MapDBPartitionUpsertMetadataManager implements PartitionUpsertMetad
       @Nullable PartialUpsertHandler partialUpsertHandler, ServerMetrics serverMetrics) {
     _tableNameWithType = tableNameWithType;
     _partitionId = partitionId;
+    _tableNameWithPartition = tableNameWithType + "_" + partitionId;
     _primaryKeyColumns = primaryKeyColumns;
     _comparisonColumn = comparisonColumn;
     // TBD: not used
@@ -99,7 +101,7 @@ public class MapDBPartitionUpsertMetadataManager implements PartitionUpsertMetad
     _partialUpsertHandler = partialUpsertHandler;
     _serverMetrics = serverMetrics;
 
-    _primaryKeyToRecordLocationMap = DbMap.getInstance().createMap(tableNameWithType);
+    _primaryKeyToRecordLocationMap = DbMap.getInstance().createMap(_tableNameWithPartition);
     _segmentToSegmentIdMap = new ConcurrentHashMap<>();
     _segmentIdToSegmentMap = new ConcurrentHashMap<>();
     _curSegmentId = new AtomicInteger(0);

@@ -22,6 +22,8 @@ import org.apache.pinot.spi.data.readers.PrimaryKey;
 import org.mapdb.DB;
 import org.mapdb.DBMaker;
 import org.mapdb.HTreeMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class DbMap implements AutoCloseable {
 
@@ -31,17 +33,22 @@ public class DbMap implements AutoCloseable {
         return INSTANCE;
     }
 
+    private final Logger _logger;
+
     private final DB _db;
     private final LocationSerializer _locationSerializer;
     private final KeySerializer _keySerializer;
 
     private DbMap() {
+        _logger = LoggerFactory.getLogger(DbMap.class);
+        _logger.info("Initializing mapdb");
         _db = DBMaker.memoryDirectDB().make();
         _keySerializer = new KeySerializer();
         _locationSerializer = new LocationSerializer();
     }
 
     public HTreeMap<PrimaryKey, RecordLocation> createMap(String name) {
+        _logger.info("Create or open map for " + name);
         return _db.hashMap(name)
                 .keySerializer(_keySerializer)
                 .valueSerializer(_locationSerializer)
@@ -50,6 +57,7 @@ public class DbMap implements AutoCloseable {
 
     @Override
     public void close() throws Exception {
+        _logger.info("Closing mapdb");
         _db.close();
     }
 }
