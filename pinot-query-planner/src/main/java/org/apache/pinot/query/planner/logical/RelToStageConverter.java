@@ -104,7 +104,7 @@ public final class RelToStageConverter {
 
     // Parse out all equality JOIN conditions
     int leftNodeOffset = node.getLeft().getRowType().getFieldList().size();
-    List<List<Integer>> predicateColumns = PlannerUtils.parseJoinConditions(joinCondition, leftNodeOffset);
+    List<List<Integer>> predicateColumns = PlannerUtils.getJoinKeyFromConditions(joinCondition, leftNodeOffset);
 
     FieldSelectionKeySelector leftFieldSelectionKeySelector = new FieldSelectionKeySelector(predicateColumns.get(0));
     FieldSelectionKeySelector rightFieldSelectionKeySelector = new FieldSelectionKeySelector(predicateColumns.get(1));
@@ -150,6 +150,7 @@ public final class RelToStageConverter {
       case VARCHAR:
         return DataSchema.ColumnDataType.STRING;
       case BINARY:
+      case VARBINARY:
         return DataSchema.ColumnDataType.BYTES;
       default:
         throw new IllegalStateException("Unexpected RelDataTypeField: " + relDataTypeField.getType());
