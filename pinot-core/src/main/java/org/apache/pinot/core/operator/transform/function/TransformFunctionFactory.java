@@ -125,12 +125,13 @@ public class TransformFunctionFactory {
     typeToImplementation.put(TransformFunctionType.MINUTE, DateTimeTransformFunction.Minute.class);
     typeToImplementation.put(TransformFunctionType.SECOND, DateTimeTransformFunction.Second.class);
     typeToImplementation.put(TransformFunctionType.MILLISECOND, DateTimeTransformFunction.Millisecond.class);
-    typeToImplementation.put(TransformFunctionType.ARRAYLENGTH,
-        ArrayLengthTransformFunction.class);
+    typeToImplementation.put(TransformFunctionType.ARRAYLENGTH, ArrayLengthTransformFunction.class);
     typeToImplementation.put(TransformFunctionType.VALUEIN, ValueInTransformFunction.class);
     typeToImplementation.put(TransformFunctionType.MAPVALUE, MapValueTransformFunction.class);
     typeToImplementation.put(TransformFunctionType.INIDSET, InIdSetTransformFunction.class);
     typeToImplementation.put(TransformFunctionType.LOOKUP, LookupTransformFunction.class);
+
+    typeToImplementation.put(TransformFunctionType.EXTRACT, ExtractTransformFunction.class);
 
     // Regexp functions
     typeToImplementation.put(TransformFunctionType.REGEXP_EXTRACT,
@@ -160,6 +161,7 @@ public class TransformFunctionFactory {
     // logical functions
     typeToImplementation.put(TransformFunctionType.AND, AndOperatorTransformFunction.class);
     typeToImplementation.put(TransformFunctionType.OR, OrOperatorTransformFunction.class);
+    typeToImplementation.put(TransformFunctionType.NOT, NotOperatorTransformFunction.class);
 
     // geo functions
     // geo constructors
