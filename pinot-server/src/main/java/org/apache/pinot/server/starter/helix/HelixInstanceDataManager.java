@@ -57,6 +57,8 @@ import org.apache.pinot.core.util.SegmentRefreshSemaphore;
 import org.apache.pinot.segment.local.data.manager.SegmentDataManager;
 import org.apache.pinot.segment.local.data.manager.TableDataManager;
 import org.apache.pinot.segment.local.data.manager.TableDataManagerConfig;
+import org.apache.pinot.segment.local.db.DbContext;
+import org.apache.pinot.segment.local.db.DbMap;
 import org.apache.pinot.segment.local.indexsegment.mutable.MutableSegmentImpl;
 import org.apache.pinot.segment.local.segment.index.loader.IndexLoadingConfig;
 import org.apache.pinot.segment.local.utils.SegmentLocks;
@@ -132,6 +134,21 @@ public class HelixInstanceDataManager implements InstanceDataManager {
             return null;
           }
         });
+
+    // Instantiate mapDb
+    //
+    String mapDir = _instanceDataManagerConfig.getInstanceLocationMapDir();
+    if (mapDir != null) {
+      File instanceMapDir = new File(mapDir);
+      if (!instanceMapDir.exists()) {
+        Preconditions.checkState(instanceMapDir.mkdirs());
+      }
+
+      DbContext.getInstance().setPath(mapDir);
+      DbContext.getInstance().setEnabled(true);
+    } else {
+      DbContext.getInstance().setEnabled(false);
+    }
   }
 
   @Override
@@ -151,6 +168,7 @@ public class HelixInstanceDataManager implements InstanceDataManager {
       tableDataManager.shutDown();
     }
     SegmentBuildTimeLeaseExtender.shutdownExecutor();
+    DbMap.getInstance().close();
     LOGGER.info("Helix instance data manager shut down");
   }
 

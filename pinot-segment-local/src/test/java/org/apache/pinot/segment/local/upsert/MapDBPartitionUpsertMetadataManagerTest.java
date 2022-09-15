@@ -25,9 +25,12 @@ import java.util.List;
 import java.util.Map;
 import org.apache.pinot.common.metrics.ServerMetrics;
 import org.apache.pinot.common.utils.LLCSegmentName;
+import org.apache.pinot.segment.local.db.DbContext;
+import org.apache.pinot.segment.local.db.DbMap;
 import org.apache.pinot.segment.local.db.RecordLocation;
 import org.apache.pinot.segment.local.indexsegment.immutable.EmptyIndexSegment;
 import org.apache.pinot.segment.local.indexsegment.immutable.ImmutableSegmentImpl;
+import org.apache.pinot.segment.local.utils.HashUtils;
 import org.apache.pinot.segment.spi.IndexSegment;
 import org.apache.pinot.segment.spi.MutableSegment;
 import org.apache.pinot.segment.spi.index.metadata.SegmentMetadataImpl;
@@ -37,6 +40,8 @@ import org.apache.pinot.spi.config.table.UpsertConfig;
 import org.apache.pinot.spi.data.readers.PrimaryKey;
 import org.apache.pinot.spi.utils.JsonUtils;
 import org.apache.pinot.spi.utils.builder.TableNameBuilder;
+import org.testng.annotations.AfterClass;
+import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -52,18 +57,41 @@ import static org.testng.Assert.assertTrue;
 public class MapDBPartitionUpsertMetadataManagerTest {
   private static final String RAW_TABLE_NAME = "testTable";
   private static final String REALTIME_TABLE_NAME = TableNameBuilder.REALTIME.tableNameWithType(RAW_TABLE_NAME);
+  private static final String PATH = System.getenv("TMPDIR");
 
-  @Test
-  public void testAddReplaceRemoveSegment() {
-    verifyAddReplaceRemoveSegment();
+  @BeforeClass
+  public static void setup() {
+    DbContext.getInstance().setEnabled(true);
+    DbContext.getInstance().setPath(PATH);
+    DbContext.getInstance().setSize(2);
   }
 
-  private void verifyAddReplaceRemoveSegment() {
+  @AfterClass
+  public static void close() throws Exception {
+    DbMap.getInstance().close();
+    DbMap.getInstance().deleteFile();
+  }
+
+  @Test
+  public void testAddReplaceRemoveSegmentNone() {
+    verifyAddReplaceRemoveSegment(HashFunction.NONE);
+  }
+
+  @Test
+  public void testAddReplaceRemoveSegmentMD5() {
+    verifyAddReplaceRemoveSegment(HashFunction.MD5);
+  }
+
+  @Test
+  public void testAddReplaceRemoveSegmentMurmur() {
+    verifyAddReplaceRemoveSegment(HashFunction.MURMUR3);
+  }
+
+  private void verifyAddReplaceRemoveSegment(HashFunction hashFunction) {
     MapDBPartitionUpsertMetadataManager upsertMetadataManager =
         new MapDBPartitionUpsertMetadataManager(REALTIME_TABLE_NAME, 0, Collections.singletonList("pk"),
-            "timeCol", HashFunction.NONE, null, mock(ServerMetrics.class));
-    //Map<Object, RecordLocation> recordLocationMap = upsertMetadataManager._primaryKeyToRecordLocationMap;
-    Map<PrimaryKey, RecordLocation> recordLocationMap = upsertMetadataManager._primaryKeyToRecordLocationMap;
+            "timeCol", hashFunction, null, mock(ServerMetrics.class));
+    Map<byte[], RecordLocation> recordLocationMap = upsertMetadataManager._primaryKeyToRecordLocationMap;
     recordLocationMap.clear();
     Map<Integer, IndexSegment> segmentMap = upsertMetadataManager._segmentIdToSegmentMap;
     segmentMap.clear();
@@ -79,9 +107,9 @@ public class MapDBPartitionUpsertMetadataManagerTest {
     upsertMetadataManager.addSegment(segment1, validDocIds1, recordInfoList1.iterator());
     // segment1: 0 -> {5, 100}, 1 -> {4, 120}, 2 -> {2, 100}
     assertEquals(recordLocationMap.size(), 3);
-    checkRecordLocation(recordLocationMap, segmentMap, 0, segment1, 5, 100);
-    checkRecordLocation(recordLocationMap, segmentMap, 1, segment1, 4, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 2, segment1, 2, 100);
+    checkRecordLocation(recordLocationMap, segmentMap, 0, segment1, 5, 100, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 1, segment1, 4, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 2, segment1, 2, 100, hashFunction);
     assertEquals(validDocIds1.getMutableRoaringBitmap().toArray(), new int[]{2, 4, 5});
 
     // Add the second segment
@@ -95,10 +123,10 @@ public class MapDBPartitionUpsertMetadataManagerTest {
     // segment1: 1 -> {4, 120}
     // segment2: 0 -> {0, 100}, 2 -> {2, 120}, 3 -> {3, 80}
     assertEquals(recordLocationMap.size(), 4);
-    checkRecordLocation(recordLocationMap, segmentMap, 0, segment2, 0, 100);
-    checkRecordLocation(recordLocationMap, segmentMap, 1, segment1, 4, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 2, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 3, 80);
+    checkRecordLocation(recordLocationMap, segmentMap, 0, segment2, 0, 100, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 1, segment1, 4, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 2, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 3, 80, hashFunction);
     assertEquals(validDocIds1.getMutableRoaringBitmap().toArray(), new int[]{4});
     assertEquals(validDocIds2.getMutableRoaringBitmap().toArray(), new int[]{0, 2, 3});
 
@@ -108,10 +136,10 @@ public class MapDBPartitionUpsertMetadataManagerTest {
     // segment1: 1 -> {4, 120}
     // segment2: 0 -> {0, 100}, 2 -> {2, 120}, 3 -> {3, 80}
     assertEquals(recordLocationMap.size(), 4);
-    checkRecordLocation(recordLocationMap, segmentMap, 0, segment2, 0, 100);
-    checkRecordLocation(recordLocationMap, segmentMap, 1, segment1, 4, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 2, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 3, 80);
+    checkRecordLocation(recordLocationMap, segmentMap, 0, segment2, 0, 100, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 1, segment1, 4, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 2, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 3, 80, hashFunction);
     assertEquals(validDocIds1.getMutableRoaringBitmap().toArray(), new int[]{4});
     assertEquals(validDocIds2.getMutableRoaringBitmap().toArray(), new int[]{0, 2, 3});
 
@@ -123,10 +151,10 @@ public class MapDBPartitionUpsertMetadataManagerTest {
     // segment2: 0 -> {0, 100}, 2 -> {2, 120}, 3 -> {3, 80}
     // new segment1: 1 -> {4, 120}
     assertEquals(recordLocationMap.size(), 4);
-    checkRecordLocation(recordLocationMap, segmentMap, 0, segment2, 0, 100);
-    checkRecordLocation(recordLocationMap, segmentMap, 1, newSegment1, 4, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 2, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 3, 80);
+    checkRecordLocation(recordLocationMap, segmentMap, 0, segment2, 0, 100, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 1, newSegment1, 4, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 2, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 3, 80, hashFunction);
     assertEquals(validDocIds1.getMutableRoaringBitmap().toArray(), new int[]{4});
     assertEquals(validDocIds2.getMutableRoaringBitmap().toArray(), new int[]{0, 2, 3});
     assertEquals(newValidDocIds1.getMutableRoaringBitmap().toArray(), new int[]{4});
@@ -137,10 +165,10 @@ public class MapDBPartitionUpsertMetadataManagerTest {
     // segment2: 0 -> {0, 100}, 2 -> {2, 120}, 3 -> {3, 80}
     // new segment1: 1 -> {4, 120}
     assertEquals(recordLocationMap.size(), 4);
-    checkRecordLocation(recordLocationMap, segmentMap, 0, segment2, 0, 100);
-    checkRecordLocation(recordLocationMap, segmentMap, 1, newSegment1, 4, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 2, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 3, 80);
+    checkRecordLocation(recordLocationMap, segmentMap, 0, segment2, 0, 100, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 1, newSegment1, 4, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 2, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 3, 80, hashFunction);
     assertEquals(validDocIds1.getMutableRoaringBitmap().toArray(), new int[]{4});
     assertEquals(validDocIds2.getMutableRoaringBitmap().toArray(), new int[]{0, 2, 3});
     assertEquals(newValidDocIds1.getMutableRoaringBitmap().toArray(), new int[]{4});
@@ -151,10 +179,10 @@ public class MapDBPartitionUpsertMetadataManagerTest {
     // segment2: 0 -> {0, 100}, 2 -> {2, 120}, 3 -> {3, 80}
     // new segment1: 1 -> {4, 120}
     assertEquals(recordLocationMap.size(), 4);
-    checkRecordLocation(recordLocationMap, segmentMap, 0, segment2, 0, 100);
-    checkRecordLocation(recordLocationMap, segmentMap, 1, newSegment1, 4, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 2, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 3, 80);
+    checkRecordLocation(recordLocationMap, segmentMap, 0, segment2, 0, 100, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 1, newSegment1, 4, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 2, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 3, 80, hashFunction);
     assertEquals(validDocIds2.getMutableRoaringBitmap().toArray(), new int[]{0, 2, 3});
     assertEquals(newValidDocIds1.getMutableRoaringBitmap().toArray(), new int[]{4});
 
@@ -163,7 +191,7 @@ public class MapDBPartitionUpsertMetadataManagerTest {
     // segment2: 0 -> {0, 100}, 2 -> {2, 120}, 3 -> {3, 80} (not in the map)
     // new segment1: 1 -> {4, 120}
     assertEquals(recordLocationMap.size(), 1);
-    checkRecordLocation(recordLocationMap, segmentMap, 1, newSegment1, 4, 120);
+    checkRecordLocation(recordLocationMap, segmentMap, 1, newSegment1, 4, 120, hashFunction);
     assertEquals(validDocIds2.getMutableRoaringBitmap().toArray(), new int[]{0, 2, 3});
     assertEquals(newValidDocIds1.getMutableRoaringBitmap().toArray(), new int[]{4});
   }
@@ -215,10 +243,12 @@ public class MapDBPartitionUpsertMetadataManagerTest {
     return new PrimaryKey(new Object[]{value});
   }
 
-  private static void checkRecordLocation(Map<PrimaryKey, RecordLocation> recordLocationMap,
-          Map<Integer, IndexSegment> segmentMap, int keyValue, IndexSegment segment, int docId, int comparisonValue) {
+  private static void checkRecordLocation(Map<byte[], RecordLocation> recordLocationMap,
+          Map<Integer, IndexSegment> segmentMap,
+          int keyValue, IndexSegment segment, int docId, int comparisonValue, HashFunction hashFunction) {
 
-    RecordLocation recordLocation = recordLocationMap.get(makePrimaryKey(keyValue));
+    byte[] key = HashUtils.hashPrimaryKeyAsBytes(makePrimaryKey(keyValue), hashFunction);
+    RecordLocation recordLocation = recordLocationMap.get(key);
     IndexSegment storedSegment = segmentMap.get(recordLocation.getSegmentId());
 
     assertNotNull(recordLocation);
@@ -230,16 +260,25 @@ public class MapDBPartitionUpsertMetadataManagerTest {
 
 
   @Test
-  public void testAddRecord() {
-    verifyAddRecord();
+  public void testAddRecordNone() {
+    verifyAddRecord(HashFunction.NONE);
   }
 
-  private void verifyAddRecord() {
+  @Test
+  public void testAddRecordMD5() {
+    verifyAddRecord(HashFunction.MD5);
+  }
+
+  @Test
+  public void testAddRecordMurmur() {
+    verifyAddRecord(HashFunction.MURMUR3);
+  }
+
+  private void verifyAddRecord(HashFunction hashFunction) {
     MapDBPartitionUpsertMetadataManager upsertMetadataManager =
         new MapDBPartitionUpsertMetadataManager(REALTIME_TABLE_NAME, 0, Collections.singletonList("pk"),
-            "timeCol", HashFunction.NONE, null, mock(ServerMetrics.class));
-    //Map<Object, RecordLocation> recordLocationMap = upsertMetadataManager._primaryKeyToRecordLocationMap;
-    Map<PrimaryKey, RecordLocation> recordLocationMap = upsertMetadataManager._primaryKeyToRecordLocationMap;
+            "timeCol", hashFunction, null, mock(ServerMetrics.class));
+    Map<byte[], RecordLocation> recordLocationMap = upsertMetadataManager._primaryKeyToRecordLocationMap;
     recordLocationMap.clear();
     Map<Integer, IndexSegment> segmentMap = upsertMetadataManager._segmentIdToSegmentMap;
     segmentMap.clear();
@@ -261,40 +300,40 @@ public class MapDBPartitionUpsertMetadataManagerTest {
 
     // segment1: 0 -> {0, 100}, 1 -> {1, 120}, 2 -> {2, 100}
     // segment2: 3 -> {0, 100}
-    checkRecordLocation(recordLocationMap, segmentMap, 0, segment1, 0, 100);
-    checkRecordLocation(recordLocationMap, segmentMap, 1, segment1, 1, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 2, segment1, 2, 100);
-    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 0, 100);
+    checkRecordLocation(recordLocationMap, segmentMap, 0, segment1, 0, 100, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 1, segment1, 1, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 2, segment1, 2, 100, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 0, 100, hashFunction);
     assertEquals(validDocIds1.getMutableRoaringBitmap().toArray(), new int[]{0, 1, 2});
     assertEquals(validDocIds2.getMutableRoaringBitmap().toArray(), new int[]{0});
 
     upsertMetadataManager.addRecord(segment2, new RecordInfo(makePrimaryKey(2), 1, 120));
     // segment1: 0 -> {0, 100}, 1 -> {1, 120}
     // segment2: 2 -> {1, 120}, 3 -> {0, 100}
-    checkRecordLocation(recordLocationMap, segmentMap, 0, segment1, 0, 100);
-    checkRecordLocation(recordLocationMap, segmentMap, 1, segment1, 1, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 1, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 0, 100);
+    checkRecordLocation(recordLocationMap, segmentMap, 0, segment1, 0, 100, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 1, segment1, 1, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 1, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 0, 100, hashFunction);
     assertEquals(validDocIds1.getMutableRoaringBitmap().toArray(), new int[]{0, 1});
     assertEquals(validDocIds2.getMutableRoaringBitmap().toArray(), new int[]{0, 1});
 
     upsertMetadataManager.addRecord(segment2, new RecordInfo(makePrimaryKey(1), 2, 100));
     // segment1: 0 -> {0, 100}, 1 -> {1, 120}
     // segment2: 2 -> {1, 120}, 3 -> {0, 100}
-    checkRecordLocation(recordLocationMap, segmentMap, 0, segment1, 0, 100);
-    checkRecordLocation(recordLocationMap, segmentMap, 1, segment1, 1, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 1, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 0, 100);
+    checkRecordLocation(recordLocationMap, segmentMap, 0, segment1, 0, 100, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 1, segment1, 1, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 1, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 0, 100, hashFunction);
     assertEquals(validDocIds1.getMutableRoaringBitmap().toArray(), new int[]{0, 1});
     assertEquals(validDocIds2.getMutableRoaringBitmap().toArray(), new int[]{0, 1});
 
     upsertMetadataManager.addRecord(segment2, new RecordInfo(makePrimaryKey(0), 3, 100));
     // segment1: 1 -> {1, 120}
     // segment2: 0 -> {3, 100}, 2 -> {1, 120}, 3 -> {0, 100}
-    checkRecordLocation(recordLocationMap, segmentMap, 0, segment2, 3, 100);
-    checkRecordLocation(recordLocationMap, segmentMap, 1, segment1, 1, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 1, 120);
-    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 0, 100);
+    checkRecordLocation(recordLocationMap, segmentMap, 0, segment2, 3, 100, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 1, segment1, 1, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 2, segment2, 1, 120, hashFunction);
+    checkRecordLocation(recordLocationMap, segmentMap, 3, segment2, 0, 100, hashFunction);
     assertEquals(validDocIds1.getMutableRoaringBitmap().toArray(), new int[]{1});
     assertEquals(validDocIds2.getMutableRoaringBitmap().toArray(), new int[]{0, 1, 3});
   }

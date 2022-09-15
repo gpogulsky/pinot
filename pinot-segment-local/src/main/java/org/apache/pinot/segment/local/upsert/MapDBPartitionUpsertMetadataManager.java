@@ -39,6 +39,7 @@ import org.apache.pinot.segment.local.db.DbMap;
 import org.apache.pinot.segment.local.db.RecordLocation;
 import org.apache.pinot.segment.local.indexsegment.immutable.EmptyIndexSegment;
 import org.apache.pinot.segment.local.indexsegment.immutable.ImmutableSegmentImpl;
+import org.apache.pinot.segment.local.utils.HashUtils;
 import org.apache.pinot.segment.local.utils.SegmentLocks;
 import org.apache.pinot.segment.spi.ImmutableSegment;
 import org.apache.pinot.segment.spi.IndexSegment;
@@ -73,11 +74,10 @@ public class MapDBPartitionUpsertMetadataManager implements PartitionUpsertMetad
   private final Logger _logger;
 
   //@VisibleForTesting
-  final HTreeMap<PrimaryKey, RecordLocation> _primaryKeyToRecordLocationMap;
+  final HTreeMap<byte[], RecordLocation> _primaryKeyToRecordLocationMap;
   private final ConcurrentHashMap<IndexSegment, Integer> _segmentToSegmentIdMap;
   final ConcurrentHashMap<Integer, IndexSegment> _segmentIdToSegmentMap;
   private final AtomicInteger _curSegmentId;
-
 
   @VisibleForTesting
   final Set<IndexSegment> _replacedSegments = ConcurrentHashMap.newKeySet();
@@ -168,7 +168,7 @@ public class MapDBPartitionUpsertMetadataManager implements PartitionUpsertMetad
     while (recordInfoIterator.hasNext()) {
       RecordInfo recordInfo = recordInfoIterator.next();
 
-      PrimaryKey key = recordInfo.getPrimaryKey();
+      byte[] key = HashUtils.hashPrimaryKeyAsBytes(recordInfo.getPrimaryKey(), _hashFunction);
       boolean updateNeeded;
       boolean updated = false;
       int updateCounter = 0;
@@ -262,8 +262,8 @@ public class MapDBPartitionUpsertMetadataManager implements PartitionUpsertMetad
 
     Integer segmentId = this.getSegmentId(segment);
 
-    //_primaryKeyToRecordLocationMap.compute(HashUtils.hashPrimaryKey(recordInfo.getPrimaryKey(), _hashFunction),
-    _primaryKeyToRecordLocationMap.compute(recordInfo.getPrimaryKey(),
+    byte[] key = HashUtils.hashPrimaryKeyAsBytes(recordInfo.getPrimaryKey(), _hashFunction);
+    _primaryKeyToRecordLocationMap.compute(key,
         (primaryKey, currentLocation) -> {
           if (currentLocation != null) {
             // Existing primary key
@@ -410,8 +410,8 @@ public class MapDBPartitionUpsertMetadataManager implements PartitionUpsertMetad
     while (iterator.hasNext()) {
       int docId = iterator.next();
       UpsertUtils.getPrimaryKey(segment, _primaryKeyColumns, docId, primaryKey);
-      //_primaryKeyToRecordLocationMap.computeIfPresent(HashUtils.hashPrimaryKey(primaryKey, _hashFunction),
-      _primaryKeyToRecordLocationMap.computeIfPresent(primaryKey,
+      byte[] key = HashUtils.hashPrimaryKeyAsBytes(primaryKey, _hashFunction);
+      RecordLocation location = _primaryKeyToRecordLocationMap.computeIfPresent(key,
           (pk, recordLocation) -> {
             if (recordLocation.getSegmentId().equals(segmentId)) {
               return null;
@@ -431,9 +431,10 @@ public class MapDBPartitionUpsertMetadataManager implements PartitionUpsertMetad
       return record;
     }
 
+    byte[] key = HashUtils.hashPrimaryKeyAsBytes(recordInfo.getPrimaryKey(), _hashFunction);
     AtomicReference<GenericRow> previousRecordReference = new AtomicReference<>();
     RecordLocation currentLocation = _primaryKeyToRecordLocationMap.computeIfPresent(
-            recordInfo.getPrimaryKey(), (pk, recordLocation) -> {
+            key, (pk, recordLocation) -> {
               if (recordInfo.getComparisonValue().compareTo(recordLocation.getComparisonValue()) >= 0) {
                 _reuse.clear();
                 previousRecordReference.set(_segmentIdToSegmentMap.get(recordLocation.getSegmentId())
