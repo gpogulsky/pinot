@@ -61,6 +61,7 @@ import org.apache.pinot.common.utils.config.TagNameUtils;
 import org.apache.pinot.common.utils.helix.HelixHelper;
 import org.apache.pinot.core.query.executor.sql.SqlQueryExecutor;
 import org.apache.pinot.core.transport.ListenerConfig;
+import org.apache.pinot.core.transport.server.routing.stats.ServerRoutingStatsManager;
 import org.apache.pinot.core.util.ListenerConfigUtil;
 import org.apache.pinot.spi.env.PinotConfiguration;
 import org.apache.pinot.spi.metrics.PinotMetricUtils;
@@ -112,6 +113,8 @@ public abstract class BaseBrokerStarter implements ServiceStartable {
   protected ClusterChangeMediator _clusterChangeMediator;
   // Participant Helix manager handles Helix functionality such as state transitions and messages
   protected HelixManager _participantHelixManager;
+  // Handles the server routing stats.
+  protected ServerRoutingStatsManager _serverRoutingStatsManager;
 
   @Override
   public void init(PinotConfiguration brokerConf)
@@ -133,14 +136,16 @@ public abstract class BaseBrokerStarter implements ServiceStartable {
     _port = _listenerConfigs.get(0).getPort();
     _tlsPort = ListenerConfigUtil.findLastTlsPort(_listenerConfigs, -1);
 
-    _instanceId = _brokerConf.getProperty(Helix.Instance.INSTANCE_ID_KEY);
-    if (_instanceId != null) {
-      // NOTE: Force all instances to have the same prefix in order to derive the instance type based on the instance id
-      Preconditions.checkState(InstanceTypeUtils.isBroker(_instanceId), "Instance id must have prefix '%s', got '%s'",
-          Helix.PREFIX_OF_BROKER_INSTANCE, _instanceId);
-    } else {
+    _instanceId = _brokerConf.getProperty(Broker.CONFIG_OF_BROKER_ID);
+    if (_instanceId == null) {
+      _instanceId = _brokerConf.getProperty(Helix.Instance.INSTANCE_ID_KEY);
+    }
+    if (_instanceId == null) {
       _instanceId = Helix.PREFIX_OF_BROKER_INSTANCE + _hostname + "_" + _port;
     }
+    // NOTE: Force all instances to have the same prefix in order to derive the instance type based on the instance id
+    Preconditions.checkState(InstanceTypeUtils.isBroker(_instanceId), "Instance id must have prefix '%s', got '%s'",
+        Helix.PREFIX_OF_BROKER_INSTANCE, _instanceId);
 
     _brokerConf.setProperty(Broker.CONFIG_OF_BROKER_ID, _instanceId);
   }
@@ -233,7 +238,9 @@ public abstract class BaseBrokerStarter implements ServiceStartable {
         _brokerConf.getProperty(Broker.CONFIG_OF_ALLOWED_TABLES_FOR_EMITTING_METRICS, Collections.emptyList()));
     _brokerMetrics.initializeGlobalMeters();
     // Set up request handling classes
-    _routingManager = new BrokerRoutingManager(_brokerMetrics);
+    _serverRoutingStatsManager = new ServerRoutingStatsManager(_brokerConf);
+    _serverRoutingStatsManager.init();
+    _routingManager = new BrokerRoutingManager(_brokerMetrics, _serverRoutingStatsManager, _brokerConf);
     _routingManager.init(_spectatorHelixManager);
     _accessControlFactory =
         AccessControlFactory.loadFactory(_brokerConf.subset(Broker.ACCESS_CONTROL_CONFIG_PREFIX), _propertyStore);
@@ -265,11 +272,11 @@ public abstract class BaseBrokerStarter implements ServiceStartable {
       if (_brokerConf.getProperty(Broker.BROKER_NETTYTLS_ENABLED, false)) {
         singleStageBrokerRequestHandler =
             new SingleConnectionBrokerRequestHandler(_brokerConf, _routingManager, _accessControlFactory,
-                queryQuotaManager, tableCache, _brokerMetrics, nettyDefaults, tlsDefaults);
+                queryQuotaManager, tableCache, _brokerMetrics, nettyDefaults, tlsDefaults, _serverRoutingStatsManager);
       } else {
         singleStageBrokerRequestHandler =
             new SingleConnectionBrokerRequestHandler(_brokerConf, _routingManager, _accessControlFactory,
-                queryQuotaManager, tableCache, _brokerMetrics, nettyDefaults, null);
+                queryQuotaManager, tableCache, _brokerMetrics, nettyDefaults, null, _serverRoutingStatsManager);
       }
     }
 
@@ -295,7 +302,7 @@ public abstract class BaseBrokerStarter implements ServiceStartable {
     LOGGER.info("Starting broker admin application on: {}", ListenerConfigUtil.toString(_listenerConfigs));
     _brokerAdminApplication =
         new BrokerAdminApiApplication(_routingManager, _brokerRequestHandler, _brokerMetrics, _brokerConf,
-            _sqlQueryExecutor);
+            _sqlQueryExecutor, _serverRoutingStatsManager);
     _brokerAdminApplication.start(_listenerConfigs);
 
     LOGGER.info("Initializing cluster change mediator");

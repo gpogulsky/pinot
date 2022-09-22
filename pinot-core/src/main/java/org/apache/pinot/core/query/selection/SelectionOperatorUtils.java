@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -42,7 +43,6 @@ import org.apache.pinot.core.query.request.context.QueryContext;
 import org.apache.pinot.segment.spi.IndexSegment;
 import org.apache.pinot.spi.utils.ArrayCopyUtils;
 import org.apache.pinot.spi.utils.ByteArray;
-import org.apache.pinot.spi.utils.NullValueUtils;
 import org.roaringbitmap.RoaringBitmap;
 
 
@@ -243,21 +243,17 @@ public class SelectionOperatorUtils {
     RoaringBitmap[] nullBitmaps = null;
     if (nullHandlingEnabled) {
       nullBitmaps = new RoaringBitmap[numColumns];
-      Object[] colDefaultNullValues = new Object[numColumns];
+      Object[] nullPlaceholders = new Object[numColumns];
       for (int colId = 0; colId < numColumns; colId++) {
-        if (storedColumnDataTypes[colId] != ColumnDataType.OBJECT && !storedColumnDataTypes[colId].isArray()) {
-          colDefaultNullValues[colId] =
-              NullValueUtils.getDefaultNullValue(storedColumnDataTypes[colId].toDataType());
-        }
         nullBitmaps[colId] = new RoaringBitmap();
+        nullPlaceholders[colId] = storedColumnDataTypes[colId].getNullPlaceholder();
       }
-
       int rowId = 0;
       for (Object[] row : rows) {
         for (int i = 0; i < numColumns; i++) {
           Object columnValue = row[i];
           if (columnValue == null) {
-            row[i] = colDefaultNullValues[i];
+            row[i] = nullPlaceholders[i];
             nullBitmaps[i].add(rowId);
           }
         }
@@ -433,7 +429,7 @@ public class SelectionOperatorUtils {
       int numColumns = dataTable.getDataSchema().size();
       int numRows = dataTable.getNumberOfRows();
       if (nullHandlingEnabled) {
-        RoaringBitmap[] nullBitmaps = new RoaringBitmap[numColumns];;
+        RoaringBitmap[] nullBitmaps = new RoaringBitmap[numColumns];
         for (int coldId = 0; coldId < numColumns; coldId++) {
           nullBitmaps[coldId] = dataTable.getNullRowIds(coldId);
         }
@@ -540,6 +536,86 @@ public class SelectionOperatorUtils {
       columnToIndexMap.put(columns[i], i);
     }
     return columnToIndexMap;
+  }
+
+  /**
+   * Helper method to get the type-compatible {@link Comparator} for selection rows. (Inter segment)
+   * <p>Type-compatible comparator allows compatible types to compare with each other.
+   *
+   * @return flexible {@link Comparator} for selection rows.
+   */
+  public static Comparator<Object[]> getTypeCompatibleComparator(List<OrderByExpressionContext> orderByExpressions,
+      DataSchema dataSchema, boolean isNullHandlingEnabled) {
+    ColumnDataType[] columnDataTypes = dataSchema.getColumnDataTypes();
+
+    // Compare all single-value columns
+    int numOrderByExpressions = orderByExpressions.size();
+    List<Integer> valueIndexList = new ArrayList<>(numOrderByExpressions);
+    for (int i = 0; i < numOrderByExpressions; i++) {
+      if (!columnDataTypes[i].isArray()) {
+        valueIndexList.add(i);
+      }
+    }
+
+    int numValuesToCompare = valueIndexList.size();
+    int[] valueIndices = new int[numValuesToCompare];
+    boolean[] useDoubleComparison = new boolean[numValuesToCompare];
+    // Use multiplier -1 or 1 to control ascending/descending order
+    int[] multipliers = new int[numValuesToCompare];
+    for (int i = 0; i < numValuesToCompare; i++) {
+      int valueIndex = valueIndexList.get(i);
+      valueIndices[i] = valueIndex;
+      if (columnDataTypes[valueIndex].isNumber()) {
+        useDoubleComparison[i] = true;
+      }
+      multipliers[i] = orderByExpressions.get(valueIndex).isAsc() ? -1 : 1;
+    }
+
+    if (isNullHandlingEnabled) {
+      return (o1, o2) -> {
+        for (int i = 0; i < numValuesToCompare; i++) {
+          int index = valueIndices[i];
+          Object v1 = o1[index];
+          Object v2 = o2[index];
+          if (v1 == null) {
+            // The default null ordering is: 'NULLS LAST'.
+            return v2 == null ? 0 : -multipliers[i];
+          } else if (v2 == null) {
+            return multipliers[i];
+          }
+          int result;
+          if (useDoubleComparison[i]) {
+            result = Double.compare(((Number) v1).doubleValue(), ((Number) v2).doubleValue());
+          } else {
+            //noinspection unchecked
+            result = ((Comparable) v1).compareTo(v2);
+          }
+          if (result != 0) {
+            return result * multipliers[i];
+          }
+        }
+        return 0;
+      };
+    } else {
+      return (o1, o2) -> {
+        for (int i = 0; i < numValuesToCompare; i++) {
+          int index = valueIndices[i];
+          Object v1 = o1[index];
+          Object v2 = o2[index];
+          int result;
+          if (useDoubleComparison[i]) {
+            result = Double.compare(((Number) v1).doubleValue(), ((Number) v2).doubleValue());
+          } else {
+            //noinspection unchecked
+            result = ((Comparable) v1).compareTo(v2);
+          }
+          if (result != 0) {
+            return result * multipliers[i];
+          }
+        }
+        return 0;
+      };
+    }
   }
 
   /**

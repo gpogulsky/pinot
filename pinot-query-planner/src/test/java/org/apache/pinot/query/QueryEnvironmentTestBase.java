@@ -43,7 +43,9 @@ public class QueryEnvironmentTestBase {
   @DataProvider(name = "testQueryDataProvider")
   protected Object[][] provideQueries() {
     return new Object[][] {
-        new Object[]{"SELECT * FROM a LIMIT 10"},
+        new Object[]{"SELECT * FROM a ORDER BY col1 LIMIT 10"},
+        new Object[]{"SELECT * FROM b ORDER BY col1, col2 DESC LIMIT 10"},
+        new Object[]{"SELECT * FROM d"},
         new Object[]{"SELECT * FROM a JOIN b ON a.col1 = b.col2"},
         new Object[]{"SELECT * FROM a JOIN b ON a.col1 = b.col2 WHERE a.col3 >= 0"},
         new Object[]{"SELECT * FROM a JOIN b ON a.col1 = b.col2 WHERE a.col3 >= 0 AND a.col3 > b.col3"},
@@ -61,6 +63,12 @@ public class QueryEnvironmentTestBase {
         new Object[]{"SELECT a.col1, COUNT(*), SUM(a.col3) FROM a WHERE a.col3 >= 0 AND a.col2 = 'a' GROUP BY a.col1 "
             + "HAVING COUNT(*) > 10 AND MAX(a.col3) >= 0 AND MIN(a.col3) < 20 AND SUM(a.col3) <= 10 "
             + "AND AVG(a.col3) = 5"},
+        new Object[]{"SELECT dateTrunc('DAY', ts) FROM a LIMIT 10"},
+        new Object[]{"SELECT dateTrunc('DAY', a.ts + b.ts) FROM a JOIN b on a.col1 = b.col1 AND a.col2 = b.col2"},
+        new Object[]{"SELECT a.col2, a.col3 FROM a JOIN b ON a.col1 = b.col1 "
+            + " WHERE a.col3 >= 0 GROUP BY a.col2, a.col3"},
+        new Object[]{"SELECT a.col1, b.col2 FROM a JOIN b ON a.col1 = b.col1 WHERE a.col2 IN ('foo', 'bar') AND"
+            + " b.col2 NOT IN ('alice', 'charlie')"},
     };
   }
 }

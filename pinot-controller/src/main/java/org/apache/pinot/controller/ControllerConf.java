@@ -123,6 +123,9 @@ public class ControllerConf extends PinotConfiguration {
     @Deprecated
     public static final String DEPRECATED_TASK_MANAGER_FREQUENCY_IN_SECONDS = "controller.task.frequencyInSeconds";
     public static final String TASK_MANAGER_FREQUENCY_PERIOD = "controller.task.frequencyPeriod";
+    public static final String TASK_MANAGER_SKIP_LATE_CRON_SCHEDULE = "controller.task.skipLateCronSchedule";
+    public static final String TASK_MANAGER_MAX_CRON_SCHEDULE_DELAY_IN_SECONDS =
+        "controller.task.maxCronScheduleDelayInSeconds";
     // Deprecated as of 0.8.0
     @Deprecated
     public static final String DEPRECATED_MINION_INSTANCES_CLEANUP_TASK_FREQUENCY_IN_SECONDS =
@@ -210,6 +213,7 @@ public class ControllerConf extends PinotConfiguration {
   }
 
   private static final String SERVER_ADMIN_REQUEST_TIMEOUT_SECONDS = "server.request.timeoutSeconds";
+  private static final String MINION_ADMIN_REQUEST_TIMEOUT_SECONDS = "minion.request.timeoutSeconds";
   private static final String SEGMENT_COMMIT_TIMEOUT_SECONDS = "controller.realtime.segment.commit.timeoutSeconds";
   private static final String DELETED_SEGMENTS_RETENTION_IN_DAYS = "controller.deleted.segments.retentionInDays";
   public static final String TABLE_MIN_REPLICAS = "table.minReplicas";
@@ -237,6 +241,7 @@ public class ControllerConf extends PinotConfiguration {
   private static final String PINOT_FS_FACTORY_CLASS_LOCAL = "controller.storage.factory.class.file";
 
   private static final int DEFAULT_SERVER_ADMIN_REQUEST_TIMEOUT_SECONDS = 30;
+  private static final int DEFAULT_MINION_ADMIN_REQUEST_TIMEOUT_SECONDS = 30;
   private static final int DEFAULT_DELETED_SEGMENTS_RETENTION_IN_DAYS = 7;
   private static final int DEFAULT_TABLE_MIN_REPLICAS = 1;
   private static final boolean DEFAULT_ENABLE_SPLIT_COMMIT = true;
@@ -646,12 +651,28 @@ public class ControllerConf extends PinotConfiguration {
     return getProperty(SERVER_ADMIN_REQUEST_TIMEOUT_SECONDS, DEFAULT_SERVER_ADMIN_REQUEST_TIMEOUT_SECONDS);
   }
 
+  public void setMinionAdminRequestTimeoutSeconds(int timeoutSeconds) {
+    setProperty(MINION_ADMIN_REQUEST_TIMEOUT_SECONDS, timeoutSeconds);
+  }
+
+  public int getMinionAdminRequestTimeoutSeconds() {
+    return getProperty(MINION_ADMIN_REQUEST_TIMEOUT_SECONDS, DEFAULT_MINION_ADMIN_REQUEST_TIMEOUT_SECONDS);
+  }
+
   public int getDeletedSegmentsRetentionInDays() {
     return getProperty(DELETED_SEGMENTS_RETENTION_IN_DAYS, DEFAULT_DELETED_SEGMENTS_RETENTION_IN_DAYS);
   }
 
   public void setDeletedSegmentsRetentionInDays(int retentionInDays) {
     setProperty(DELETED_SEGMENTS_RETENTION_IN_DAYS, retentionInDays);
+  }
+
+  public boolean isSkipLateCronSchedule() {
+    return getProperty(ControllerPeriodicTasksConf.TASK_MANAGER_SKIP_LATE_CRON_SCHEDULE, false);
+  }
+
+  public int getMaxCronScheduleDelayInSeconds() {
+    return getProperty(ControllerPeriodicTasksConf.TASK_MANAGER_MAX_CRON_SCHEDULE_DELAY_IN_SECONDS, 600);
   }
 
   public int getTaskManagerFrequencyInSeconds() {
