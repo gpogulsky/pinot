@@ -29,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 import org.apache.pinot.common.metrics.ServerGauge;
@@ -79,6 +80,7 @@ public class MapDBPartitionUpsertMetadataManager implements PartitionUpsertMetad
   @VisibleForTesting
   final ConcurrentHashMap<Integer, IndexSegment> _segmentIdToSegmentMap;
   private final AtomicInteger _curSegmentId;
+  private final ReentrantLock _lock;
 
   @VisibleForTesting
   final Set<IndexSegment> _replacedSegments = ConcurrentHashMap.newKeySet();
@@ -105,6 +107,7 @@ public class MapDBPartitionUpsertMetadataManager implements PartitionUpsertMetad
     _segmentToSegmentIdMap = new ConcurrentHashMap<>();
     _segmentIdToSegmentMap = new ConcurrentHashMap<>();
     _curSegmentId = new AtomicInteger(0);
+    _lock = new ReentrantLock();
 
     _logger = LoggerFactory.getLogger(tableNameWithType + "-" + partitionId + "-" + getClass().getSimpleName());
   }
@@ -164,81 +167,87 @@ public class MapDBPartitionUpsertMetadataManager implements PartitionUpsertMetad
     segment.enableUpsert(this, validDocIds);
 
     AtomicInteger numKeysInWrongSegment = new AtomicInteger();
-    while (recordInfoIterator.hasNext()) {
-      RecordInfo recordInfo = recordInfoIterator.next();
-      byte[] key = HashUtils.hashPrimaryKeyAsBytes(recordInfo.getPrimaryKey(), _hashFunction);
-      _primaryKeyToRecordLocationMap.compute(key,
-          (primaryKey, currentRecordLocation) -> {
-            if (currentRecordLocation != null) {
-              // Existing primary key
-              Integer currentSegmentId = currentRecordLocation.getSegmentId();
-              IndexSegment currentSegment = _segmentIdToSegmentMap.get(currentSegmentId);
-              int comparisonResult =
-                  recordInfo.getComparisonValue().compareTo(currentRecordLocation.getComparisonValue());
+    _lock.lock();
+    try {
+      while (recordInfoIterator.hasNext()) {
+        RecordInfo recordInfo = recordInfoIterator.next();
+        byte[] key = HashUtils.hashPrimaryKeyAsBytes(recordInfo.getPrimaryKey(), _hashFunction);
+        _primaryKeyToRecordLocationMap.compute(key,
+                (primaryKey, currentRecordLocation) -> {
+                  if (currentRecordLocation != null) {
+                    // Existing primary key
+                    Integer currentSegmentId = currentRecordLocation.getSegmentId();
+                    IndexSegment currentSegment = _segmentIdToSegmentMap.get(currentSegmentId);
+                    int comparisonResult =
+                            recordInfo.getComparisonValue().compareTo(currentRecordLocation.getComparisonValue());
 
-              // The current record is in the same segment
-              // Update the record location when there is a tie to keep the newer record. Note that the record info
-              // iterator will return records with incremental doc ids.
-              if (currentSegment == segment) {
-                if (comparisonResult >= 0) {
-                  validDocIds.replace(currentRecordLocation.getDocId(), recordInfo.getDocId());
-                  return new RecordLocation(segmentId, recordInfo.getDocId(), recordInfo.getComparisonValue());
-                } else {
-                  return currentRecordLocation;
-                }
-              }
+                    // The current record is in the same segment
+                    // Update the record location when there is a tie to keep the newer record.
+                    // Note that the record info iterator will return records with incremental doc ids.
+                    if (currentSegment == segment) {
+                      if (comparisonResult >= 0) {
+                        validDocIds.replace(currentRecordLocation.getDocId(), recordInfo.getDocId());
+                        return new RecordLocation(segmentId, recordInfo.getDocId(), recordInfo.getComparisonValue());
+                      } else {
+                        return currentRecordLocation;
+                      }
+                    }
 
-              // The current record is in an old segment being replaced
-              // This could happen when committing a consuming segment, or reloading a completed segment. In this
-              // case, we want to update the record location when there is a tie because the record locations should
-              // point to the new added segment instead of the old segment being replaced. Also, do not update the valid
-              // doc ids for the old segment because it has not been replaced yet. We pass in an optional valid doc ids
-              // snapshot for the old segment, which can be updated and used to track the docs not replaced yet.
-              if (currentSegment == oldSegment) {
-                if (comparisonResult >= 0) {
-                  validDocIds.add(recordInfo.getDocId());
-                  if (validDocIdsForOldSegment != null) {
-                    validDocIdsForOldSegment.remove(currentRecordLocation.getDocId());
+                    // The current record is in an old segment being replaced
+                    // This could happen when committing a consuming segment, or reloading a completed segment. In this
+                    // case, we want to update the record location when there is a tie because the record locations
+                    // should point to the new added segment instead of the old segment being replaced.
+                    // Also, do not update the valid doc ids for the old segment because it has not been replaced yet.
+                    // We pass in an optional valid doc ids snapshot for the old segment, which can be updated and used
+                    // to track the docs not replaced yet.
+                    if (currentSegment == oldSegment) {
+                      if (comparisonResult >= 0) {
+                        validDocIds.add(recordInfo.getDocId());
+                        if (validDocIdsForOldSegment != null) {
+                          validDocIdsForOldSegment.remove(currentRecordLocation.getDocId());
+                        }
+                        return new RecordLocation(segmentId, recordInfo.getDocId(), recordInfo.getComparisonValue());
+                      } else {
+                        return currentRecordLocation;
+                      }
+                    }
+
+                    // This should not happen because the previously replaced segment should have all keys removed.
+                    // We still handle it here, and also track the number of keys not properly replaced previously.
+                    String currentSegmentName = currentSegment.getSegmentName();
+                    if (currentSegmentName.equals(segmentName)) {
+                      numKeysInWrongSegment.getAndIncrement();
+                      if (comparisonResult >= 0) {
+                        validDocIds.add(recordInfo.getDocId());
+                        return new RecordLocation(segmentId, recordInfo.getDocId(), recordInfo.getComparisonValue());
+                      } else {
+                        return currentRecordLocation;
+                      }
+                    }
+
+                    // The current record is in a different segment
+                    // Update the record location when getting a newer comparison value, or the value is the same as the
+                    // current value, but the segment has a larger sequence number (the segment is newer than the
+                    // current segment).
+                    if (comparisonResult > 0 || (comparisonResult == 0 && LLCSegmentName.isLowLevelConsumerSegmentName(
+                            segmentName) && LLCSegmentName.isLowLevelConsumerSegmentName(currentSegmentName)
+                            && LLCSegmentName.getSequenceNumber(segmentName) > LLCSegmentName.getSequenceNumber(
+                            currentSegmentName))) {
+                      Objects.requireNonNull(currentSegment.getValidDocIds()).remove(currentRecordLocation.getDocId());
+                      validDocIds.add(recordInfo.getDocId());
+                      return new RecordLocation(segmentId, recordInfo.getDocId(), recordInfo.getComparisonValue());
+                    } else {
+                      return currentRecordLocation;
+                    }
+                  } else {
+                    // New primary key
+                    validDocIds.add(recordInfo.getDocId());
+                    return new RecordLocation(segmentId, recordInfo.getDocId(), recordInfo.getComparisonValue());
                   }
-                  return new RecordLocation(segmentId, recordInfo.getDocId(), recordInfo.getComparisonValue());
-                } else {
-                  return currentRecordLocation;
-                }
-              }
-
-              // This should not happen because the previously replaced segment should have all keys removed. We still
-              // handle it here, and also track the number of keys not properly replaced previously.
-              String currentSegmentName = currentSegment.getSegmentName();
-              if (currentSegmentName.equals(segmentName)) {
-                numKeysInWrongSegment.getAndIncrement();
-                if (comparisonResult >= 0) {
-                  validDocIds.add(recordInfo.getDocId());
-                  return new RecordLocation(segmentId, recordInfo.getDocId(), recordInfo.getComparisonValue());
-                } else {
-                  return currentRecordLocation;
-                }
-              }
-
-              // The current record is in a different segment
-              // Update the record location when getting a newer comparison value, or the value is the same as the
-              // current value, but the segment has a larger sequence number (the segment is newer than the current
-              // segment).
-              if (comparisonResult > 0 || (comparisonResult == 0 && LLCSegmentName.isLowLevelConsumerSegmentName(
-                  segmentName) && LLCSegmentName.isLowLevelConsumerSegmentName(currentSegmentName)
-                  && LLCSegmentName.getSequenceNumber(segmentName) > LLCSegmentName.getSequenceNumber(
-                  currentSegmentName))) {
-                Objects.requireNonNull(currentSegment.getValidDocIds()).remove(currentRecordLocation.getDocId());
-                validDocIds.add(recordInfo.getDocId());
-                return new RecordLocation(segmentId, recordInfo.getDocId(), recordInfo.getComparisonValue());
-              } else {
-                return currentRecordLocation;
-              }
-            } else {
-              // New primary key
-              validDocIds.add(recordInfo.getDocId());
-              return new RecordLocation(segmentId, recordInfo.getDocId(), recordInfo.getComparisonValue());
-            }
-          });
+                });
+      }
+    } finally {
+      _lock.unlock();
     }
     int numKeys = numKeysInWrongSegment.get();
     if (numKeys > 0) {
@@ -252,32 +261,38 @@ public class MapDBPartitionUpsertMetadataManager implements PartitionUpsertMetad
     ThreadSafeMutableRoaringBitmap validDocIds = Objects.requireNonNull(segment.getValidDocIds());
     Integer segmentId = this.getSegmentId(segment);
     byte[] key = HashUtils.hashPrimaryKeyAsBytes(recordInfo.getPrimaryKey(), _hashFunction);
-    _primaryKeyToRecordLocationMap.compute(key,
-        (primaryKey, currentRecordLocation) -> {
-          if (currentRecordLocation != null) {
-            // Existing primary key
+    _lock.lock();
+    try {
+      _primaryKeyToRecordLocationMap.compute(key,
+              (primaryKey, currentRecordLocation) -> {
+                if (currentRecordLocation != null) {
+                  // Existing primary key
 
-            // Update the record location when the new comparison value is greater than or equal to the current value.
-            // Update the record location when there is a tie to keep the newer record.
-            if (recordInfo.getComparisonValue().compareTo(currentRecordLocation.getComparisonValue()) >= 0) {
-              IndexSegment currentSegment = _segmentIdToSegmentMap.get(currentRecordLocation.getSegmentId());
-              int currentDocId = currentRecordLocation.getDocId();
-              if (segment == currentSegment) {
-                validDocIds.replace(currentDocId, recordInfo.getDocId());
-              } else {
-                Objects.requireNonNull(currentSegment.getValidDocIds()).remove(currentDocId);
-                validDocIds.add(recordInfo.getDocId());
-              }
-              return new RecordLocation(segmentId, recordInfo.getDocId(), recordInfo.getComparisonValue());
-            } else {
-              return currentRecordLocation;
-            }
-          } else {
-            // New primary key
-            validDocIds.add(recordInfo.getDocId());
-            return new RecordLocation(segmentId, recordInfo.getDocId(), recordInfo.getComparisonValue());
-          }
-        });
+                  // Update the record location when the new comparison value is greater than or equal to the current
+                  // value.
+                  // Update the record location when there is a tie to keep the newer record.
+                  if (recordInfo.getComparisonValue().compareTo(currentRecordLocation.getComparisonValue()) >= 0) {
+                    IndexSegment currentSegment = _segmentIdToSegmentMap.get(currentRecordLocation.getSegmentId());
+                    int currentDocId = currentRecordLocation.getDocId();
+                    if (segment == currentSegment) {
+                      validDocIds.replace(currentDocId, recordInfo.getDocId());
+                    } else {
+                      Objects.requireNonNull(currentSegment.getValidDocIds()).remove(currentDocId);
+                      validDocIds.add(recordInfo.getDocId());
+                    }
+                    return new RecordLocation(segmentId, recordInfo.getDocId(), recordInfo.getComparisonValue());
+                  } else {
+                    return currentRecordLocation;
+                  }
+                } else {
+                  // New primary key
+                  validDocIds.add(recordInfo.getDocId());
+                  return new RecordLocation(segmentId, recordInfo.getDocId(), recordInfo.getComparisonValue());
+                }
+              });
+    } finally {
+      _lock.unlock();
+    }
 
     // Update metrics
     _serverMetrics.setValueOfPartitionGauge(_tableNameWithType, _partitionId, ServerGauge.UPSERT_PRIMARY_KEYS_COUNT,
@@ -458,7 +473,12 @@ public class MapDBPartitionUpsertMetadataManager implements PartitionUpsertMetad
   public void close() {
     _logger.info("Closing metadata manager for table {} and partition {}, current primary key count: {}",
         _tableNameWithType, _partitionId, _primaryKeyToRecordLocationMap.size());
-    _primaryKeyToRecordLocationMap.close();
+    try {
+      _primaryKeyToRecordLocationMap.close();
+    } catch (IllegalAccessError error) {
+      //_primaryKeyToRecordLocationMap
+      _logger.error(_tableNameWithPartition + " - unable to close table in mapdb", error);
+    }
   }
 
   private Integer getSegmentId(IndexSegment segment) {
