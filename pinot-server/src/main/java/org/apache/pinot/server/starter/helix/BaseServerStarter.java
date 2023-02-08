@@ -61,20 +61,22 @@ import org.apache.pinot.common.utils.TlsUtils;
 import org.apache.pinot.common.utils.config.TagNameUtils;
 import org.apache.pinot.common.utils.fetcher.SegmentFetcherFactory;
 import org.apache.pinot.common.utils.helix.HelixHelper;
-import org.apache.pinot.core.common.datatable.DataTableFactory;
+import org.apache.pinot.common.version.PinotVersion;
+import org.apache.pinot.core.common.datatable.DataTableBuilderFactory;
 import org.apache.pinot.core.data.manager.InstanceDataManager;
 import org.apache.pinot.core.data.manager.realtime.RealtimeConsumptionRateManager;
-import org.apache.pinot.core.query.request.context.ThreadTimer;
 import org.apache.pinot.core.transport.ListenerConfig;
 import org.apache.pinot.core.util.ListenerConfigUtil;
 import org.apache.pinot.segment.local.realtime.impl.invertedindex.RealtimeLuceneIndexRefreshState;
 import org.apache.pinot.segment.spi.memory.PinotDataBuffer;
 import org.apache.pinot.server.access.AccessControlFactory;
+import org.apache.pinot.server.api.AdminApiApplication;
 import org.apache.pinot.server.conf.ServerConf;
 import org.apache.pinot.server.realtime.ControllerLeaderLocator;
 import org.apache.pinot.server.realtime.ServerSegmentCompletionProtocolHandler;
 import org.apache.pinot.server.starter.ServerInstance;
 import org.apache.pinot.server.starter.ServerQueriesDisabledTracker;
+import org.apache.pinot.spi.accounting.ThreadResourceUsageProvider;
 import org.apache.pinot.spi.crypt.PinotCrypterFactory;
 import org.apache.pinot.spi.env.PinotConfiguration;
 import org.apache.pinot.spi.environmentprovider.PinotEnvironmentProvider;
@@ -175,19 +177,23 @@ public abstract class BaseServerStarter implements ServiceStartable {
     _pinotEnvironmentProvider = initializePinotEnvironmentProvider();
 
     // Enable/disable thread CPU time measurement through instance config.
-    ThreadTimer.setThreadCpuTimeMeasurementEnabled(
+    ThreadResourceUsageProvider.setThreadCpuTimeMeasurementEnabled(
         _serverConf.getProperty(Server.CONFIG_OF_ENABLE_THREAD_CPU_TIME_MEASUREMENT,
             Server.DEFAULT_ENABLE_THREAD_CPU_TIME_MEASUREMENT));
+    // Enable/disable thread memory allocation tracking through instance config
+    ThreadResourceUsageProvider.setThreadMemoryMeasurementEnabled(
+        _serverConf.getProperty(Server.CONFIG_OF_ENABLE_THREAD_ALLOCATED_BYTES_MEASUREMENT,
+        Server.DEFAULT_THREAD_ALLOCATED_BYTES_MEASUREMENT));
 
     // Set data table version send to broker.
     int dataTableVersion =
-        _serverConf.getProperty(Server.CONFIG_OF_CURRENT_DATA_TABLE_VERSION, Server.DEFAULT_CURRENT_DATA_TABLE_VERSION);
-    if (dataTableVersion > Server.DEFAULT_CURRENT_DATA_TABLE_VERSION) {
+        _serverConf.getProperty(Server.CONFIG_OF_CURRENT_DATA_TABLE_VERSION, DataTableBuilderFactory.DEFAULT_VERSION);
+    if (dataTableVersion > DataTableBuilderFactory.DEFAULT_VERSION) {
       LOGGER.warn("Setting experimental DataTable version newer than default via config could result in"
           + " backward-compatibility issues. Current default DataTable version: "
-          + Server.DEFAULT_CURRENT_DATA_TABLE_VERSION);
+          + DataTableBuilderFactory.DEFAULT_VERSION);
     }
-    DataTableFactory.setDataTableVersion(dataTableVersion);
+    DataTableBuilderFactory.setDataTableVersion(dataTableVersion);
 
     LOGGER.info("Initializing Helix manager with zkAddress: {}, clusterName: {}, instanceId: {}", _zkAddress,
         _helixClusterName, _instanceId);
@@ -494,7 +500,7 @@ public abstract class BaseServerStarter implements ServiceStartable {
   @Override
   public void start()
       throws Exception {
-    LOGGER.info("Starting Pinot server");
+    LOGGER.info("Starting Pinot server (Version: {})", PinotVersion.VERSION);
     long startTimeMs = System.currentTimeMillis();
 
     // install default SSL context if necessary (even if not force-enabled everywhere)
@@ -609,7 +615,7 @@ public abstract class BaseServerStarter implements ServiceStartable {
     } catch (IOException e) {
       LOGGER.warn("Caught exception closing PinotFS classes", e);
     }
-    _adminApiApplication.stop();
+    _adminApiApplication.startShuttingDown();
     _helixAdmin.setConfig(_instanceConfigScope,
         Collections.singletonMap(Helix.IS_SHUTDOWN_IN_PROGRESS, Boolean.toString(true)));
 
@@ -629,6 +635,7 @@ public abstract class BaseServerStarter implements ServiceStartable {
     _realtimeLuceneIndexRefreshState.stop();
     LOGGER.info("Deregistering service status handler");
     ServiceStatus.removeServiceStatusCallback(_instanceId);
+    _adminApiApplication.stop();
     LOGGER.info("Finish shutting down Pinot server for {}", _instanceId);
   }
 

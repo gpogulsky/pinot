@@ -112,7 +112,7 @@ public class InnerSegmentSelectionMultiValueRawQueriesTest extends BaseMultiValu
     resultsBlock = selectionOnlyOperator.nextBlock();
     executionStatistics = selectionOnlyOperator.getExecutionStatistics();
     assertEquals(executionStatistics.getNumDocsScanned(), 10L);
-    assertEquals(executionStatistics.getNumEntriesScannedInFilter(), 79L);
+    assertEquals(executionStatistics.getNumEntriesScannedInFilter(), 76054L);
     assertEquals(executionStatistics.getNumEntriesScannedPostFilter(), 100L);
     assertEquals(executionStatistics.getNumTotalDocs(), 100000L);
     selectionDataSchema = resultsBlock.getDataSchema();
@@ -163,7 +163,7 @@ public class InnerSegmentSelectionMultiValueRawQueriesTest extends BaseMultiValu
     resultsBlock = selectionOnlyOperator.nextBlock();
     executionStatistics = selectionOnlyOperator.getExecutionStatistics();
     assertEquals(executionStatistics.getNumDocsScanned(), 10L);
-    assertEquals(executionStatistics.getNumEntriesScannedInFilter(), 79L);
+    assertEquals(executionStatistics.getNumEntriesScannedInFilter(), 76054L);
     assertEquals(executionStatistics.getNumEntriesScannedPostFilter(), 30L);
     assertEquals(executionStatistics.getNumTotalDocs(), 100000L);
     selectionDataSchema = resultsBlock.getDataSchema();
@@ -203,7 +203,7 @@ public class InnerSegmentSelectionMultiValueRawQueriesTest extends BaseMultiValu
     assertEquals(selectionDataSchema.getColumnDataType(columnIndexMap.get("column1")), DataSchema.ColumnDataType.INT);
     assertEquals(selectionDataSchema.getColumnDataType(columnIndexMap.get("column6")),
         DataSchema.ColumnDataType.INT_ARRAY);
-    PriorityQueue<Object[]> selectionResult = (PriorityQueue<Object[]>) resultsBlock.getRows();
+    PriorityQueue<Object[]> selectionResult = resultsBlock.getRowsAsPriorityQueue();
     assertEquals(selectionResult.size(), 10);
     Object[] lastRow = selectionResult.peek();
     assertEquals(lastRow.length, 4);
@@ -215,7 +215,7 @@ public class InnerSegmentSelectionMultiValueRawQueriesTest extends BaseMultiValu
     resultsBlock = selectionOrderByOperator.nextBlock();
     executionStatistics = selectionOrderByOperator.getExecutionStatistics();
     assertEquals(executionStatistics.getNumDocsScanned(), 15620L);
-    assertEquals(executionStatistics.getNumEntriesScannedInFilter(), 275416L);
+    assertEquals(executionStatistics.getNumEntriesScannedInFilter(), 129757L);
     // 15620 * (2 order-by columns) + 10 * (2 non-order-by columns)
     assertEquals(executionStatistics.getNumEntriesScannedPostFilter(), 31260L);
     assertEquals(executionStatistics.getNumTotalDocs(), 100000L);
@@ -228,7 +228,7 @@ public class InnerSegmentSelectionMultiValueRawQueriesTest extends BaseMultiValu
     assertEquals(selectionDataSchema.getColumnDataType(columnIndexMap.get("column1")), DataSchema.ColumnDataType.INT);
     assertEquals(selectionDataSchema.getColumnDataType(columnIndexMap.get("column6")),
         DataSchema.ColumnDataType.INT_ARRAY);
-    selectionResult = (PriorityQueue<Object[]>) resultsBlock.getRows();
+    selectionResult = resultsBlock.getRowsAsPriorityQueue();
     assertEquals(selectionResult.size(), 10);
     lastRow = selectionResult.peek();
     assertEquals(lastRow.length, 4);

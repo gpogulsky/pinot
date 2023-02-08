@@ -19,22 +19,15 @@
 package org.apache.calcite.rel.rules;
 
 import com.google.common.collect.ImmutableList;
-import java.util.List;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.plan.RelOptRuleCall;
-import org.apache.calcite.plan.hep.HepRelVertex;
 import org.apache.calcite.rel.RelDistributions;
 import org.apache.calcite.rel.RelNode;
-import org.apache.calcite.rel.core.Exchange;
 import org.apache.calcite.rel.core.Join;
-import org.apache.calcite.rel.core.RelFactories;
-import org.apache.calcite.rel.hint.RelHint;
+import org.apache.calcite.rel.core.JoinInfo;
 import org.apache.calcite.rel.logical.LogicalExchange;
 import org.apache.calcite.rel.logical.LogicalJoin;
-import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.tools.RelBuilderFactory;
-import org.apache.pinot.query.planner.PlannerUtils;
-import org.apache.pinot.query.planner.hints.PinotRelationalHints;
 
 
 /**
@@ -42,7 +35,7 @@ import org.apache.pinot.query.planner.hints.PinotRelationalHints;
  */
 public class PinotJoinExchangeNodeInsertRule extends RelOptRule {
   public static final PinotJoinExchangeNodeInsertRule INSTANCE =
-      new PinotJoinExchangeNodeInsertRule(RelFactories.LOGICAL_BUILDER);
+      new PinotJoinExchangeNodeInsertRule(PinotRuleUtils.PINOT_REL_FACTORY);
 
   public PinotJoinExchangeNodeInsertRule(RelBuilderFactory factory) {
     super(operand(LogicalJoin.class, any()), factory, null);
@@ -55,34 +48,29 @@ public class PinotJoinExchangeNodeInsertRule extends RelOptRule {
     }
     if (call.rel(0) instanceof Join) {
       Join join = call.rel(0);
-      return !isExchange(join.getLeft()) && !isExchange(join.getRight());
+      return !PinotRuleUtils.isExchange(join.getLeft()) && !PinotRuleUtils.isExchange(join.getRight());
     }
     return false;
   }
 
   @Override
   public void onMatch(RelOptRuleCall call) {
-    // TODO: this only works for single equality JOIN. add generic condition parser
     Join join = call.rel(0);
     RelNode leftInput = join.getInput(0);
     RelNode rightInput = join.getInput(1);
 
     RelNode leftExchange;
     RelNode rightExchange;
-    List<RelHint> hints = join.getHints();
-    if (hints.contains(PinotRelationalHints.USE_BROADCAST_DISTRIBUTE)) {
-      // TODO: determine which side should be the broadcast table based on table metadata
-      // TODO: support SINGLETON exchange if the non-broadcast table size is small enough to stay local.
-      leftExchange = LogicalExchange.create(leftInput, RelDistributions.RANDOM_DISTRIBUTED);
+    JoinInfo joinInfo = join.analyzeCondition();
+
+    if (joinInfo.leftKeys.isEmpty()) {
+      // when there's no JOIN key, use broadcast.
+      leftExchange = LogicalExchange.create(leftInput, RelDistributions.SINGLETON);
       rightExchange = LogicalExchange.create(rightInput, RelDistributions.BROADCAST_DISTRIBUTED);
-    } else { // if (hints.contains(PinotRelationalHints.USE_HASH_DISTRIBUTE)) {
-      RexCall joinCondition = (RexCall) join.getCondition();
-      int leftNodeOffset = join.getLeft().getRowType().getFieldNames().size();
-      List<List<Integer>> conditions = PlannerUtils.getJoinKeyFromConditions(joinCondition, leftNodeOffset);
-      leftExchange = LogicalExchange.create(leftInput,
-          RelDistributions.hash(conditions.get(0)));
-      rightExchange = LogicalExchange.create(rightInput,
-          RelDistributions.hash(conditions.get(1)));
+    } else {
+      // when join key exists, use hash distribution.
+      leftExchange = LogicalExchange.create(leftInput, RelDistributions.hash(joinInfo.leftKeys));
+      rightExchange = LogicalExchange.create(rightInput, RelDistributions.hash(joinInfo.rightKeys));
     }
 
     RelNode newJoinNode =
@@ -91,13 +79,5 @@ public class PinotJoinExchangeNodeInsertRule extends RelOptRule {
             ImmutableList.copyOf(join.getSystemFieldList()));
 
     call.transformTo(newJoinNode);
-  }
-
-  private static boolean isExchange(RelNode rel) {
-    RelNode reference = rel;
-    if (reference instanceof HepRelVertex) {
-      reference = ((HepRelVertex) reference).getCurrentRel();
-    }
-    return reference instanceof Exchange;
   }
 }

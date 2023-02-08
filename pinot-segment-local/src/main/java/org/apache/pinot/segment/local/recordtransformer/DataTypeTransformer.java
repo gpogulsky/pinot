@@ -27,15 +27,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.pinot.common.utils.PinotDataType;
 import org.apache.pinot.spi.config.table.TableConfig;
-import org.apache.pinot.spi.data.DateTimeFieldSpec;
-import org.apache.pinot.spi.data.DateTimeFormatSpec;
 import org.apache.pinot.spi.data.FieldSpec;
 import org.apache.pinot.spi.data.Schema;
 import org.apache.pinot.spi.data.readers.GenericRow;
-import org.apache.pinot.spi.utils.TimeUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,9 +47,6 @@ public class DataTypeTransformer implements RecordTransformer {
 
   private final Map<String, PinotDataType> _dataTypes = new HashMap<>();
   private final boolean _continueOnError;
-  private final boolean _validateTimeValues;
-  private final String _timeColumnName;
-  private final DateTimeFormatSpec _timeFormatSpec;
 
   public DataTypeTransformer(TableConfig tableConfig, Schema schema) {
     for (FieldSpec fieldSpec : schema.getAllFieldSpecs()) {
@@ -61,19 +54,11 @@ public class DataTypeTransformer implements RecordTransformer {
         _dataTypes.put(fieldSpec.getName(), PinotDataType.getPinotDataTypeForIngestion(fieldSpec));
       }
     }
-
-    _continueOnError = tableConfig.getIndexingConfig().isContinueOnError();
-    _validateTimeValues = tableConfig.getIndexingConfig().isValidateTimeValue();
-    _timeColumnName = tableConfig.getValidationConfig().getTimeColumnName();
-
-    DateTimeFormatSpec timeColumnSpec = null;
-    if (StringUtils.isNotEmpty(_timeColumnName)) {
-      DateTimeFieldSpec dateTimeFieldSpec = schema.getSpecForTimeColumn(_timeColumnName);
-      Preconditions.checkState(dateTimeFieldSpec != null, "Failed to find spec for time column: %s from schema: %s",
-          _timeColumnName, schema.getSchemaName());
-      timeColumnSpec = dateTimeFieldSpec.getFormatSpec();
+    if (tableConfig.getIngestionConfig() != null) {
+      _continueOnError = tableConfig.getIngestionConfig().isContinueOnError();
+    } else {
+      _continueOnError = false;
     }
-    _timeFormatSpec = timeColumnSpec;
   }
 
   @Override
@@ -84,22 +69,6 @@ public class DataTypeTransformer implements RecordTransformer {
         Object value = record.getValue(column);
         if (value == null) {
           continue;
-        }
-
-        if (_validateTimeValues && _timeFormatSpec != null && column.equals(_timeColumnName)) {
-          long timeInMs = _timeFormatSpec.fromFormatToMillis(value.toString());
-          if (!TimeUtils.timeValueInValidRange(timeInMs)) {
-            if (_continueOnError) {
-              LOGGER.debug("Time value {} is not in valid range for column: {}, must be between: {}", timeInMs,
-                  _timeColumnName, TimeUtils.VALID_TIME_INTERVAL);
-              record.putValue(column, null);
-              continue;
-            } else {
-              throw new RuntimeException(
-                  String.format("Time value %s is not in valid range for column: %s, must be between: %s", timeInMs,
-                      _timeColumnName, TimeUtils.VALID_TIME_INTERVAL));
-            }
-          }
         }
 
         PinotDataType dest = entry.getValue();
@@ -123,6 +92,7 @@ public class DataTypeTransformer implements RecordTransformer {
           // Single-value column
           source = PinotDataType.getSingleValueType(value.getClass());
         }
+
         // Skipping conversion when srcType!=destType is speculative, and can be unsafe when
         // the array for MV column contains values of mixing types. Mixing types can lead
         // to ClassCastException during conversion, often aborting data ingestion jobs.
@@ -143,6 +113,7 @@ public class DataTypeTransformer implements RecordTransformer {
         } else {
           LOGGER.debug("Caught exception while transforming data type for column: {}", column, e);
           record.putValue(column, null);
+          record.putValue(GenericRow.INCOMPLETE_RECORD_KEY, true);
         }
       }
     }
@@ -193,8 +164,8 @@ public class DataTypeTransformer implements RecordTransformer {
         return standardizedValues.get(0);
       }
       if (isSingleValue) {
-        throw new IllegalArgumentException("Cannot read single-value from Object[]: " + Arrays.toString(values)
-            + " for column: " + column);
+        throw new IllegalArgumentException(
+            "Cannot read single-value from Object[]: " + Arrays.toString(values) + " for column: " + column);
       }
       return standardizedValues.toArray();
     }
@@ -223,8 +194,8 @@ public class DataTypeTransformer implements RecordTransformer {
     if (numStandardizedValues == 1) {
       return standardizedValues.get(0);
     }
-    Preconditions
-        .checkState(!isSingleValue, "Cannot read single-value from Collection: %s for column: %s", collection, column);
+    Preconditions.checkState(!isSingleValue, "Cannot read single-value from Collection: %s for column: %s", collection,
+        column);
     return standardizedValues.toArray();
   }
 }

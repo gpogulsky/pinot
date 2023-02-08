@@ -59,6 +59,12 @@ public enum AggregationFunctionType {
   HISTOGRAM("histogram"),
   COVARPOP("covarPop"),
   COVARSAMP("covarSamp"),
+  VARPOP("varPop"),
+  VARSAMP("varSamp"),
+  STDDEVPOP("stdDevPop"),
+  STDDEVSAMP("stdDevSamp"),
+  SKEWNESS("skewness"),
+  KURTOSIS("kurtosis"),
 
   // Geo aggregation functions
   STUNION("STUnion"),
@@ -79,7 +85,11 @@ public enum AggregationFunctionType {
   PERCENTILERAWESTMV("percentileRawEstMV"),
   PERCENTILETDIGESTMV("percentileTDigestMV"),
   PERCENTILERAWTDIGESTMV("percentileRawTDigestMV"),
-  DISTINCT("distinct");
+  DISTINCT("distinct"),
+
+  // boolean aggregate functions
+  BOOLAND("boolAnd"),
+  BOOLOR("boolOr");
 
   private static final Set<String> NAMES = Arrays.stream(values()).flatMap(func -> Stream.of(func.name(),
       func.getName(), func.getName().toLowerCase())).collect(Collectors.toSet());

@@ -101,7 +101,8 @@ public class AggregationFunctionFactory {
         } else if (numArguments == 2) {
           // Double arguments percentile (e.g. percentile(foo, 99), percentileTDigest(bar, 95), etc.) where the
           // second argument is a decimal number from 0.0 to 100.0.
-          double percentile = parsePercentileToDouble(arguments.get(1).getLiteral());
+          // Have to use literal string because we need to cast int to double here.
+          double percentile = parsePercentileToDouble(arguments.get(1).getLiteralString());
           if (remainingFunctionName.isEmpty()) {
             // Percentile
             return new PercentileAggregationFunction(firstArgument, percentile);
@@ -169,7 +170,7 @@ public class AggregationFunctionFactory {
                     + " The function can be used as firstWithTime(dataColumn, timeColumn, 'dataType')");
               }
               FieldSpec.DataType fieldDataType
-                  = FieldSpec.DataType.valueOf(dataType.getLiteral().toUpperCase());
+                  = FieldSpec.DataType.valueOf(dataType.getLiteralString().toUpperCase());
               switch (fieldDataType) {
                 case BOOLEAN:
                 case INT:
@@ -198,7 +199,7 @@ public class AggregationFunctionFactory {
                 throw new IllegalArgumentException("Third argument of lastWithTime Function should be literal."
                     + " The function can be used as lastWithTime(dataColumn, timeColumn, 'dataType')");
               }
-              FieldSpec.DataType fieldDataType = FieldSpec.DataType.valueOf(dataType.getLiteral().toUpperCase());
+              FieldSpec.DataType fieldDataType = FieldSpec.DataType.valueOf(dataType.getLiteralString().toUpperCase());
               switch (fieldDataType) {
                 case BOOLEAN:
                 case INT:
@@ -272,6 +273,22 @@ public class AggregationFunctionFactory {
             return new CovarianceAggregationFunction(arguments, false);
           case COVARSAMP:
             return new CovarianceAggregationFunction(arguments, true);
+          case BOOLAND:
+            return new BooleanAndAggregationFunction(firstArgument, queryContext.isNullHandlingEnabled());
+          case BOOLOR:
+            return new BooleanOrAggregationFunction(firstArgument, queryContext.isNullHandlingEnabled());
+          case VARPOP:
+            return new VarianceAggregationFunction(firstArgument, false, false);
+          case VARSAMP:
+            return new VarianceAggregationFunction(firstArgument, true, false);
+          case STDDEVPOP:
+            return new VarianceAggregationFunction(firstArgument, false, true);
+          case STDDEVSAMP:
+            return new VarianceAggregationFunction(firstArgument, true, true);
+          case SKEWNESS:
+            return new FourthMomentAggregationFunction(firstArgument, FourthMomentAggregationFunction.Type.SKEWNESS);
+          case KURTOSIS:
+            return new FourthMomentAggregationFunction(firstArgument, FourthMomentAggregationFunction.Type.KURTOSIS);
           default:
             throw new IllegalArgumentException();
         }

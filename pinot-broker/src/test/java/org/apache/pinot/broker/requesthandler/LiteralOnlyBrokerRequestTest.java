@@ -29,6 +29,7 @@ import org.apache.pinot.common.metrics.BrokerMetrics;
 import org.apache.pinot.common.response.BrokerResponse;
 import org.apache.pinot.common.response.broker.ResultTable;
 import org.apache.pinot.common.utils.DataSchema;
+import org.apache.pinot.core.transport.server.routing.stats.ServerRoutingStatsManager;
 import org.apache.pinot.spi.env.PinotConfiguration;
 import org.apache.pinot.spi.metrics.PinotMetricUtils;
 import org.apache.pinot.spi.trace.RequestContext;
@@ -38,6 +39,8 @@ import org.apache.pinot.spi.utils.JsonUtils;
 import org.apache.pinot.sql.parsers.CalciteSqlParser;
 import org.testng.Assert;
 import org.testng.annotations.Test;
+
+import static org.mockito.Mockito.mock;
 
 
 public class LiteralOnlyBrokerRequestTest {
@@ -139,6 +142,22 @@ public class LiteralOnlyBrokerRequestTest {
         .compileToPinotQuery("SELECT count(*) from myTable where regexpReplace(col1, \"b(..)\", \"X$1Y\", 10 , 1, "
             + "\"m\")  = "
             + "\"fooXarYXazY\"")));
+    Assert.assertTrue(BaseBrokerRequestHandler.isLiteralOnlyQuery(
+        CalciteSqlParser.compileToPinotQuery("select isSubnetOf('1.2.3.128/0', '192.168.5.1') from mytable")));
+    Assert.assertTrue(BaseBrokerRequestHandler.isLiteralOnlyQuery(CalciteSqlParser.compileToPinotQuery(
+        "select isSubnetOf('1.2.3.128/0', rtrim('192.168.5.1      ')) from mytable")));
+    Assert.assertTrue(BaseBrokerRequestHandler.isLiteralOnlyQuery(CalciteSqlParser.compileToPinotQuery(
+        "select isSubnetOf('123:db8:85a3::8a2e:370:7334/72', '124:db8:85a3::8a2e:370:7334') from mytable")));
+    Assert.assertFalse(BaseBrokerRequestHandler.isLiteralOnlyQuery(
+        CalciteSqlParser.compileToPinotQuery("select isSubnetOf('1.2.3.128/0', foo) from mytable")));
+    Assert.assertFalse(BaseBrokerRequestHandler.isLiteralOnlyQuery(CalciteSqlParser.compileToPinotQuery(
+        "select count(*) from mytable where isSubnetOf('7890:db8:113::8a2e:370:7334/127', ltrim('   "
+            + "7890:db8:113::8a2e:370:7336'))")));
+    Assert.assertFalse(BaseBrokerRequestHandler.isLiteralOnlyQuery(CalciteSqlParser.compileToPinotQuery(
+        "select count(*) from mytable where isSubnetOf('7890:db8:113::8a2e:370:7334/127', "
+            + "'7890:db8:113::8a2e:370:7336')")));
+    Assert.assertFalse(BaseBrokerRequestHandler.isLiteralOnlyQuery(
+        CalciteSqlParser.compileToPinotQuery("select count(*) from mytable where isSubnetOf(foo, bar)")));
   }
 
   @Test
@@ -154,15 +173,18 @@ public class LiteralOnlyBrokerRequestTest {
         "SELECT toUtf8('hello!') AS encoded, " + "fromUtf8(toUtf8('hello!')) AS decoded")));
     Assert.assertTrue(BaseBrokerRequestHandler.isLiteralOnlyQuery(CalciteSqlParser.compileToPinotQuery(
         "SELECT toBase64(toUtf8('hello!')) AS encoded, " + "fromBase64('aGVsbG8h') AS decoded")));
+    Assert.assertTrue(BaseBrokerRequestHandler.isLiteralOnlyQuery(CalciteSqlParser.compileToPinotQuery(
+        "select isSubnetOf('1.2.3.128/0', '192.168.5.1') AS booleanCol from mytable")));
   }
 
   @Test
   public void testBrokerRequestHandler()
       throws Exception {
     SingleConnectionBrokerRequestHandler requestHandler =
-        new SingleConnectionBrokerRequestHandler(new PinotConfiguration(), null, ACCESS_CONTROL_FACTORY, null, null,
-            new BrokerMetrics("", PinotMetricUtils.getPinotMetricsRegistry(), true, Collections.emptySet()),
-            null, null);
+        new SingleConnectionBrokerRequestHandler(new PinotConfiguration(), null, null, ACCESS_CONTROL_FACTORY, null,
+            null, new BrokerMetrics("", PinotMetricUtils.getPinotMetricsRegistry(), true, Collections.emptySet()), null,
+            null, mock(ServerRoutingStatsManager.class));
+
     long randNum = RANDOM.nextLong();
     byte[] randBytes = new byte[12];
     RANDOM.nextBytes(randBytes);
@@ -187,9 +209,9 @@ public class LiteralOnlyBrokerRequestTest {
   public void testBrokerRequestHandlerWithAsFunction()
       throws Exception {
     SingleConnectionBrokerRequestHandler requestHandler =
-        new SingleConnectionBrokerRequestHandler(new PinotConfiguration(), null, ACCESS_CONTROL_FACTORY, null, null,
-            new BrokerMetrics("", PinotMetricUtils.getPinotMetricsRegistry(), true, Collections.emptySet()),
-            null, null);
+        new SingleConnectionBrokerRequestHandler(new PinotConfiguration(), null, null, ACCESS_CONTROL_FACTORY, null,
+            null, new BrokerMetrics("", PinotMetricUtils.getPinotMetricsRegistry(), true, Collections.emptySet()), null,
+            null, mock(ServerRoutingStatsManager.class));
     long currentTsMin = System.currentTimeMillis();
     JsonNode request = JsonUtils.stringToJsonNode(
         "{\"sql\":\"SELECT now() as currentTs, fromDateTime('2020-01-01 UTC', 'yyyy-MM-dd z') as firstDayOf2020\"}");
@@ -320,6 +342,73 @@ public class LiteralOnlyBrokerRequestTest {
     brokerResponse = requestHandler.handleRequest(request, null, requestStats);
     Assert.assertTrue(
         brokerResponse.getProcessingExceptions().get(0).getMessage().contains("IllegalArgumentException"));
+
+    request = JsonUtils.stringToJsonNode(
+        "{\"sql\":\"SELECT isSubnetOf('2001:db8:85a3::8a2e:370:7334/62', '2001:0db8:85a3:0003:ffff:ffff:ffff:ffff')"
+            + " as booleanCol\"}");
+    requestStats = Tracing.getTracer().createRequestScope();
+    brokerResponse = requestHandler.handleRequest(request, null, requestStats);
+    resultTable = brokerResponse.getResultTable();
+    dataSchema = resultTable.getDataSchema();
+    rows = resultTable.getRows();
+    Assert.assertEquals(dataSchema.getColumnName(0), "booleanCol");
+    Assert.assertEquals(dataSchema.getColumnDataType(0), DataSchema.ColumnDataType.BOOLEAN);
+    Assert.assertEquals(rows.size(), 1);
+    Assert.assertEquals(rows.get(0).length, 1);
+    Assert.assertTrue((boolean) rows.get(0)[0]);
+    Assert.assertEquals(brokerResponse.getTotalDocs(), 0);
+
+    // first argument must be in prefix format
+    request = JsonUtils.stringToJsonNode(
+        "{\"sql\":\"SELECT isSubnetOf('2001:db8:85a3::8a2e:370:7334', '2001:0db8:85a3:0003:ffff:ffff:ffff:ffff') as"
+            + " booleanCol\"}");
+    requestStats = Tracing.getTracer().createRequestScope();
+    brokerResponse = requestHandler.handleRequest(request, null, requestStats);
+    Assert.assertTrue(
+        brokerResponse.getProcessingExceptions().get(0).getMessage().contains("IllegalArgumentException"));
+
+    // first argument must be in prefix format
+    request = JsonUtils.stringToJsonNode(
+        "{\"sql\":\"SELECT isSubnetOf('105.25.245.115', '105.25.245.115') as" + " booleanCol\"}");
+    requestStats = Tracing.getTracer().createRequestScope();
+    brokerResponse = requestHandler.handleRequest(request, null, requestStats);
+    Assert.assertTrue(
+        brokerResponse.getProcessingExceptions().get(0).getMessage().contains("IllegalArgumentException"));
+
+    // second argument should not be a prefix
+    request = JsonUtils.stringToJsonNode(
+        "{\"sql\":\"SELECT isSubnetOf('1.2.3.128/26', '3.175.47.239/26') as" + " booleanCol\"}");
+    requestStats = Tracing.getTracer().createRequestScope();
+    brokerResponse = requestHandler.handleRequest(request, null, requestStats);
+    Assert.assertTrue(
+        brokerResponse.getProcessingExceptions().get(0).getMessage().contains("IllegalArgumentException"));
+
+    // second argument should not be a prefix
+    request = JsonUtils.stringToJsonNode(
+        "{\"sql\":\"SELECT isSubnetOf('5f3f:bfdb:1bbe:a824:6bf9:0fbb:d358:1889/64', "
+            + "'4275:386f:b2b5:0664:04aa:d7bd:0589:6909/64') as"
+            + " booleanCol\"}");
+    requestStats = Tracing.getTracer().createRequestScope();
+    brokerResponse = requestHandler.handleRequest(request, null, requestStats);
+    Assert.assertTrue(
+        brokerResponse.getProcessingExceptions().get(0).getMessage().contains("IllegalArgumentException"));
+
+    // invalid prefix length
+    request = JsonUtils.stringToJsonNode(
+        "{\"sql\":\"SELECT isSubnetOf('2001:4801:7825:103:be76:4eff::/129', '2001:4801:7825:103:be76:4eff::') as"
+            + " booleanCol\"}");
+    requestStats = Tracing.getTracer().createRequestScope();
+    brokerResponse = requestHandler.handleRequest(request, null, requestStats);
+    Assert.assertTrue(
+        brokerResponse.getProcessingExceptions().get(0).getMessage().contains("IllegalArgumentException"));
+
+    // invalid prefix length
+    request = JsonUtils.stringToJsonNode(
+        "{\"sql\":\"SELECT isSubnetOf('170.189.0.175/33', '170.189.0.175') as" + " booleanCol\"}");
+    requestStats = Tracing.getTracer().createRequestScope();
+    brokerResponse = requestHandler.handleRequest(request, null, requestStats);
+    Assert.assertTrue(
+        brokerResponse.getProcessingExceptions().get(0).getMessage().contains("IllegalArgumentException"));
   }
 
   /** Tests for EXPLAIN PLAN for literal only queries. */
@@ -327,9 +416,9 @@ public class LiteralOnlyBrokerRequestTest {
   public void testExplainPlanLiteralOnly()
       throws Exception {
     SingleConnectionBrokerRequestHandler requestHandler =
-        new SingleConnectionBrokerRequestHandler(new PinotConfiguration(), null, ACCESS_CONTROL_FACTORY, null, null,
-            new BrokerMetrics("", PinotMetricUtils.getPinotMetricsRegistry(), true, Collections.emptySet()),
-            null, null);
+        new SingleConnectionBrokerRequestHandler(new PinotConfiguration(), null, null, ACCESS_CONTROL_FACTORY, null,
+            null, new BrokerMetrics("", PinotMetricUtils.getPinotMetricsRegistry(), true, Collections.emptySet()), null,
+            null, mock(ServerRoutingStatsManager.class));
 
     // Test 1: select constant
     JsonNode request = JsonUtils.stringToJsonNode("{\"sql\":\"EXPLAIN PLAN FOR SELECT 1.5, 'test'\"}");

@@ -27,6 +27,7 @@ import java.util.Base64;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.pinot.common.utils.RegexpPatternConverterUtils;
 import org.apache.pinot.spi.annotations.ScalarFunction;
 
 
@@ -81,7 +82,7 @@ public class StringFunctions {
    * @param beginIndex index from which substring should be created
    * @return substring from beginIndex to end of the parent string
    */
-  @ScalarFunction
+  @ScalarFunction(names = {"substr", "substring"})
   public static String substr(String input, int beginIndex) {
     return StringUtils.substring(input, beginIndex);
   }
@@ -96,7 +97,7 @@ public class StringFunctions {
    * @param endIndex index at which substring should be terminated
    * @return substring from beginIndex to endIndex
    */
-  @ScalarFunction
+  @ScalarFunction(names = {"substr", "substring"})
   public static String substr(String input, int beginIndex, int endIndex) {
     if (endIndex == -1) {
       return substr(input, beginIndex);
@@ -111,11 +112,34 @@ public class StringFunctions {
    * @param seperator
    * @return The two input strings joined by the seperator
    */
+  @ScalarFunction(names = "concat_ws")
+  public static String concatws(String seperator, String input1, String input2) {
+    return concat(input1, input2, seperator);
+  }
+
+  /**
+   * Join two input string with seperator in between
+   * @param input1
+   * @param input2
+   * @param seperator
+   * @return The two input strings joined by the seperator
+   */
   @ScalarFunction
   public static String concat(String input1, String input2, String seperator) {
     String result = input1;
     result = result + seperator + input2;
     return result;
+  }
+
+  /**
+   * Join two input string with no seperator in between
+   * @param input1
+   * @param input2
+   * @return The two input strings joined
+   */
+  @ScalarFunction
+  public static String concat(String input1, String input2) {
+    return concat(input1, input2, "");
   }
 
   /**
@@ -210,7 +234,7 @@ public class StringFunctions {
    * @param regexp
    * @return the matched result.
    */
-  @ScalarFunction
+  @ScalarFunction(names = {"regexp_extract", "regexpExtract"})
   public static String regexpExtract(String value, String regexp) {
     return regexpExtract(value, regexp, 0, "");
   }
@@ -222,7 +246,7 @@ public class StringFunctions {
    * @param group
    * @return the matched result.
    */
-  @ScalarFunction
+  @ScalarFunction(names = {"regexp_extract", "regexpExtract"})
   public static String regexpExtract(String value, String regexp, int group) {
     return regexpExtract(value, regexp, group, "");
   }
@@ -235,7 +259,7 @@ public class StringFunctions {
    * @param defaultValue the default value if no match found
    * @return the matched result
    */
-  @ScalarFunction
+  @ScalarFunction(names = {"regexp_extract", "regexpExtract"})
   public static String regexpExtract(String value, String regexp, int group, String defaultValue) {
     Pattern p = Pattern.compile(regexp);
     Matcher matcher = p.matcher(value);
@@ -312,7 +336,7 @@ public class StringFunctions {
    * @param prefix substring to check if it is the prefix
    * @return true if string starts with prefix, false o.w.
    */
-  @ScalarFunction
+  @ScalarFunction(names = {"startsWith", "starts_with"})
   public static boolean startsWith(String input, String prefix) {
     return StringUtils.startsWith(input, prefix);
   }
@@ -323,7 +347,7 @@ public class StringFunctions {
    * @param suffix substring to check if it is the prefix
    * @return true if string ends with prefix, false o.w.
    */
-  @ScalarFunction
+  @ScalarFunction(names = {"endsWith", "ends_with"})
   public static boolean endsWith(String input, String suffix) {
     return StringUtils.endsWith(input, suffix);
   }
@@ -385,6 +409,36 @@ public class StringFunctions {
   }
 
   /**
+   * @param bytes
+   * @param charsetName encoding
+   * @return bytearray to string
+   * returns null on exception
+   */
+  @ScalarFunction
+  public static String fromBytes(byte[] bytes, String charsetName) {
+    try {
+      return new String(bytes, charsetName);
+    } catch (UnsupportedEncodingException e) {
+      return null;
+    }
+  }
+
+  /**
+   * @param input
+   * @param charsetName encoding
+   * @return bytearray to string
+   * returns null on exception
+   */
+  @ScalarFunction
+  public static byte[] toBytes(String input, String charsetName) {
+    try {
+      return input.getBytes(charsetName);
+    } catch (UnsupportedEncodingException e) {
+      return null;
+    }
+  }
+
+  /**
    * @see StandardCharsets#UTF_8#encode(String)
    * @param input
    * @return bytes
@@ -443,7 +497,7 @@ public class StringFunctions {
    */
   @ScalarFunction
   public static String[] split(String input, String delimiter) {
-    return StringUtils.split(input, delimiter);
+    return StringUtils.splitByWholeSeparator(input, delimiter);
   }
 
   /**
@@ -454,10 +508,11 @@ public class StringFunctions {
    */
   @ScalarFunction
   public static String[] split(String input, String delimiter, int limit) {
-    return StringUtils.split(input, delimiter, limit);
+    return StringUtils.splitByWholeSeparator(input, delimiter, limit);
   }
 
   /**
+   * TODO: Revisit if index should be one-based (both Presto and Postgres use one-based index, which starts with 1)
    * @param input
    * @param delimiter
    * @param index
@@ -465,7 +520,7 @@ public class StringFunctions {
    */
   @ScalarFunction
   public static String splitPart(String input, String delimiter, int index) {
-    String[] splitString = StringUtils.split(input, delimiter);
+    String[] splitString = StringUtils.splitByWholeSeparator(input, delimiter);
     if (index < splitString.length) {
       return splitString[index];
     } else {
@@ -556,7 +611,7 @@ public class StringFunctions {
   @ScalarFunction
   public static String encodeUrl(String input)
       throws UnsupportedEncodingException {
-      return URLEncoder.encode(input, StandardCharsets.UTF_8.toString());
+    return URLEncoder.encode(input, StandardCharsets.UTF_8.toString());
   }
 
   /**
@@ -605,7 +660,7 @@ public class StringFunctions {
    *             i -> Case insensitive
    * @return replaced input string
    */
-  @ScalarFunction
+  @ScalarFunction(names = {"regexpReplace", "regexp_replace"})
   public static String regexpReplace(String inputStr, String matchStr, String replaceStr, int matchStartPos,
       int occurence, String flag) {
     Integer patternFlag;
@@ -659,7 +714,7 @@ public class StringFunctions {
    * @param replaceStr Regexp or string to replace if matchStr is found
    * @return replaced input string
    */
-  @ScalarFunction
+  @ScalarFunction(names = {"regexpReplace", "regexp_replace"})
   public static String regexpReplace(String inputStr, String matchStr, String replaceStr) {
     return regexpReplace(inputStr, matchStr, replaceStr, 0, -1, "");
   }
@@ -674,7 +729,7 @@ public class StringFunctions {
    * @param matchStartPos Index of inputStr from where matching should start. Default is 0.
    * @return replaced input string
    */
-  @ScalarFunction
+  @ScalarFunction(names = {"regexpReplace", "regexp_replace"})
   public static String regexpReplace(String inputStr, String matchStr, String replaceStr, int matchStartPos) {
     return regexpReplace(inputStr, matchStr, replaceStr, matchStartPos, -1, "");
   }
@@ -690,9 +745,21 @@ public class StringFunctions {
    *                    at 0. Default is -1
    * @return replaced input string
    */
-  @ScalarFunction
+  @ScalarFunction(names = {"regexpReplace", "regexp_replace"})
   public static String regexpReplace(String inputStr, String matchStr, String replaceStr, int matchStartPos,
       int occurence) {
     return regexpReplace(inputStr, matchStr, replaceStr, matchStartPos, occurence, "");
+  }
+
+  @ScalarFunction(names = {"regexpLike", "regexp_like"})
+  public static boolean regexpLike(String inputStr, String regexPatternStr) {
+    Pattern pattern = Pattern.compile(regexPatternStr, Pattern.UNICODE_CASE | Pattern.CASE_INSENSITIVE);
+    return pattern.matcher(inputStr).find();
+  }
+
+  @ScalarFunction
+  public static boolean like(String inputStr, String likePatternStr) {
+    String regexPatternStr = RegexpPatternConverterUtils.likeToRegexpLike(likePatternStr);
+    return regexpLike(inputStr, regexPatternStr);
   }
 }

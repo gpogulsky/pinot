@@ -120,10 +120,13 @@ public class CommonConstants {
     }
 
     public static class ZkClient {
-      public static final long DEFAULT_CONNECT_TIMEOUT_SEC = 60L;
+      public static final int DEFAULT_CONNECT_TIMEOUT_MS = 60_000;
+      public static final int DEFAULT_SESSION_TIMEOUT_MS = 30_000;
       // Retry interval and count for ZK operations where we would rather fail than get an empty (wrong) result back
       public static final int RETRY_INTERVAL_MS = 50;
       public static final int RETRY_COUNT = 2;
+      public static final String ZK_CLIENT_CONNECTION_TIMEOUT_MS_CONFIG = "zk.client.connection.timeout.ms";
+      public static final String ZK_CLIENT_SESSION_TIMEOUT_MS_CONFIG = "zk.client.session.timeout.ms";
     }
 
     public static class DataSource {
@@ -136,6 +139,7 @@ public class CommonConstants {
     }
 
     public static class Instance {
+      @Deprecated
       public static final String INSTANCE_ID_KEY = "instanceId";
       public static final String DATA_DIR_KEY = "dataDir";
       public static final String ADMIN_PORT_KEY = "adminPort";
@@ -210,7 +214,7 @@ public class CommonConstants {
     public static final double DEFAULT_BROKER_QUERY_LOG_MAX_RATE_PER_SECOND = 10_000d;
     public static final String CONFIG_OF_BROKER_TIMEOUT_MS = "pinot.broker.timeoutMs";
     public static final long DEFAULT_BROKER_TIMEOUT_MS = 10_000L;
-    public static final String CONFIG_OF_BROKER_ID = "pinot.broker.id";
+    public static final String CONFIG_OF_BROKER_ID = "pinot.broker.instance.id";
     public static final String CONFIG_OF_BROKER_HOSTNAME = "pinot.broker.hostname";
     public static final String CONFIG_OF_SWAGGER_USE_HTTPS = "pinot.broker.swagger.use.https";
     // Configuration to consider the broker ServiceStatus as being STARTED if the percent of resources (tables) that
@@ -239,7 +243,6 @@ public class CommonConstants {
     public static final String MULTI_STAGE_BROKER_REQUEST_HANDLER_TYPE = "multistage";
     public static final String DEFAULT_BROKER_REQUEST_HANDLER_TYPE = NETTY_BROKER_REQUEST_HANDLER_TYPE;
 
-
     public static final String BROKER_TLS_PREFIX = "pinot.broker.tls";
     public static final String BROKER_NETTY_PREFIX = "pinot.broker.netty";
     public static final String BROKER_NETTYTLS_ENABLED = "pinot.broker.nettytls.enabled";
@@ -263,6 +266,8 @@ public class CommonConstants {
     public static final boolean DEFAULT_BROKER_REQUEST_CLIENT_IP_LOGGING = false;
 
     public static final String CONFIG_OF_LOGGER_ROOT_DIR = "pinot.broker.logger.root.dir";
+    public static final String CONFIG_OF_SWAGGER_BROKER_ENABLED = "pinot.broker.swagger.enabled";
+    public static final boolean DEFAULT_SWAGGER_BROKER_ENABLED = true;
 
     public static class Request {
       public static final String SQL = "sql";
@@ -284,6 +289,10 @@ public class CommonConstants {
         public static final String USE_MULTISTAGE_ENGINE = "useMultistageEngine";
         public static final String ENABLE_NULL_HANDLING = "enableNullHandling";
         public static final String SERVER_RETURN_FINAL_RESULT = "serverReturnFinalResult";
+        // Reorder scan based predicates based on cardinality and number of selected values
+        public static final String AND_SCAN_REORDERING = "AndScanReordering";
+
+        public static final String ORDER_BY_ALGORITHM = "orderByAlgorithm";
 
         // TODO: Remove these keys (only apply to PQL) after releasing 0.11.0
         @Deprecated
@@ -323,6 +332,92 @@ public class CommonConstants {
       public static final double DEFAULT_RETRY_DELAY_FACTOR = 2.0;
       public static final String CONFIG_OF_MAX_RETRIES = "pinot.broker.failure.detector.max.retries";
       public static final int DEFAULT_MAX_RETIRES = 10;
+    }
+
+    // Configs related to AdaptiveServerSelection.
+    public static class AdaptiveServerSelector {
+      /**
+       * Adaptive Server Selection feature has 2 parts:
+       * 1. Stats Collection
+       * 2. Routing Strategy
+       *
+       * Stats Collection is controlled by the config CONFIG_OF_ENABLE_STATS_COLLECTION.
+       * Routing Strategy is controlled by the config CONFIG_OF_TYPE.
+       *
+       *
+       *
+       * Stats Collection: Enabling/Disabling stats collection will dictate whether stats (like latency, # of inflight
+       *                   requests) will be collected when queries are routed to/received from servers. It does not
+       *                   have any impact on the Server Selection Strategy used.
+       *
+       * Routing Strategy: Decides what strategy should be used to pick a server. Note that this
+       *                   routing strategy complements the existing Balanced/ReplicaGroup/StrictReplicaGroup
+       *                   strategies and is not a replacement.The available strategies are as follows:
+       *                   1. NO_OP: Uses the default behavior offered by Balanced/ReplicaGroup/StrictReplicaGroup
+       *                   instance selectors. Does NOT require Stats Collection to be enabled.
+       *                   2. NUM_INFLIGHT_REQ: Picks the best server based on the number of inflight requests for
+       *                   each server. Requires Stats Collection to be enabled.
+       *                   3. LATENCY: Picks the best server based on the Exponential Weighted Moving Averge of Latency
+       *                   for each server. Requires Stats Collection to be enabled.
+       *                   4. HYBRID: Picks the best server by computing a custom hybrid score based on both latency
+       *                   and # inflight requests. This is based on the approach described in the paper
+       *                   https://www.usenix.org/system/files/conference/nsdi15/nsdi15-paper-suresh.pdf. Requires Stats
+       *                   Collection to be enabled.
+       */
+
+      public enum Type {
+        NO_OP,
+
+        NUM_INFLIGHT_REQ,
+
+        LATENCY,
+
+        HYBRID
+      }
+
+      private static final String CONFIG_PREFIX = "pinot.broker.adaptive.server.selector";
+
+      // Determines the type of AdaptiveServerSelector to use.
+      public static final String CONFIG_OF_TYPE = CONFIG_PREFIX + ".type";
+      public static final String DEFAULT_TYPE = Type.NO_OP.name();
+
+      // Determines whether stats collection is enabled. This can be enabled independent of CONFIG_OF_TYPE. This is
+      // so that users have an option to just enable stats collection and analyze them before deciding and enabling
+      // adaptive server selection.
+      public static final String CONFIG_OF_ENABLE_STATS_COLLECTION = CONFIG_PREFIX + ".enable.stats.collection";
+      public static final boolean DEFAULT_ENABLE_STATS_COLLECTION = false;
+
+      // Parameters to tune exponential moving average.
+
+      // The weightage to be given for a new incoming value. For example, alpha=0.30 will give 30% weightage to the
+      // new value and 70% weightage to the existing value in the Exponential Weighted Moving Average calculation.
+      public static final String CONFIG_OF_EWMA_ALPHA = CONFIG_PREFIX + ".ewma.alpha";
+      public static final double DEFAULT_EWMA_ALPHA = 0.666;
+
+      // If the EMA average has not been updated during a specified time window (defined by this property), the
+      // EMA average value is automatically decayed by an incoming value of zero. This is required to bring a server
+      // back to healthy state gracefully after it has experienced some form of slowness.
+      public static final String CONFIG_OF_AUTODECAY_WINDOW_MS = CONFIG_PREFIX + ".autodecay.window.ms";
+      public static final long DEFAULT_AUTODECAY_WINDOW_MS = 10 * 1000;
+
+      // Determines the initial duration during which incoming values are skipped in the Exponential Moving Average
+      // calculation. Until this duration has elapsed, average returned will be equal to AVG_INITIALIZATION_VAL.
+      public static final String CONFIG_OF_WARMUP_DURATION_MS = CONFIG_PREFIX + ".warmup.duration";
+      public static final long DEFAULT_WARMUP_DURATION_MS = 0;
+
+      // Determines the initialization value for Exponential Moving Average.
+      public static final String CONFIG_OF_AVG_INITIALIZATION_VAL = CONFIG_PREFIX + ".avg.initialization.val";
+      public static final double DEFAULT_AVG_INITIALIZATION_VAL = 1.0;
+
+      // Parameters related to Hybrid score.
+      public static final String CONFIG_OF_HYBRID_SCORE_EXPONENT = CONFIG_PREFIX + ".hybrid.score.exponent";
+      public static final int DEFAULT_HYBRID_SCORE_EXPONENT = 3;
+
+      // Threadpool size of ServerRoutingStatsManager. This controls the number of threads available to update routing
+      // stats for servers upon query submission and response arrival.
+      public static final String CONFIG_OF_STATS_MANAGER_THREADPOOL_SIZE =
+          CONFIG_PREFIX + ".stats.manager.threadpool.size";
+      public static final int DEFAULT_STATS_MANAGER_THREADPOOL_SIZE = 2;
     }
   }
 
@@ -504,10 +599,12 @@ public class CommonConstants {
 
     public static final String CONFIG_OF_ENABLE_THREAD_CPU_TIME_MEASUREMENT =
         "pinot.server.instance.enableThreadCpuTimeMeasurement";
+    public static final String CONFIG_OF_ENABLE_THREAD_ALLOCATED_BYTES_MEASUREMENT =
+        "pinot.server.instance.enableThreadAllocatedBytesMeasurement";
     public static final boolean DEFAULT_ENABLE_THREAD_CPU_TIME_MEASUREMENT = false;
+    public static final boolean DEFAULT_THREAD_ALLOCATED_BYTES_MEASUREMENT = false;
 
     public static final String CONFIG_OF_CURRENT_DATA_TABLE_VERSION = "pinot.server.instance.currentDataTableVersion";
-    public static final int DEFAULT_CURRENT_DATA_TABLE_VERSION = 3;
 
     // Environment Provider Configs
     public static final String PREFIX_OF_CONFIG_OF_ENVIRONMENT_PROVIDER_FACTORY =
@@ -541,6 +638,7 @@ public class CommonConstants {
 
   public static class Minion {
     public static final String CONFIG_OF_METRICS_PREFIX = "pinot.minion.";
+    public static final String CONFIG_OF_MINION_ID = "pinot.minion.instance.id";
     public static final String METADATA_EVENT_OBSERVER_PREFIX = "metadata.event.notifier";
 
     // Config keys
@@ -579,6 +677,9 @@ public class CommonConstants {
     public static final String MINION_TLS_PREFIX = "pinot.minion.tls";
     public static final String CONFIG_OF_MINION_QUERY_REWRITER_CLASS_NAMES = "pinot.minion.query.rewriter.class.names";
     public static final String CONFIG_OF_LOGGER_ROOT_DIR = "pinot.minion.logger.root.dir";
+    public static final String CONFIG_OF_EVENT_OBSERVER_CLEANUP_DELAY_IN_SEC =
+        "pinot.minion.event.observer.cleanupDelayInSec";
+    public static final char TASK_LIST_SEPARATOR = ',';
   }
 
   public static class ControllerJob {
@@ -596,6 +697,56 @@ public class CommonConstants {
      * Segment reload job ZK props
      */
     public static final String SEGMENT_RELOAD_JOB_SEGMENT_NAME = "segmentName";
+  }
+
+  public static class Accounting {
+    public static final int ANCHOR_TASK_ID = -1;
+    public static final int IGNORED_TASK_ID = -2;
+    public static final String CONFIG_OF_FACTORY_NAME = "accounting.factory.name";
+
+    public static final String CONFIG_OF_ENABLE_THREAD_CPU_SAMPLING = "accounting.enable.thread.cpu.sampling";
+    public static final Boolean DEFAULT_ENABLE_THREAD_CPU_SAMPLING = false;
+
+    public static final String CONFIG_OF_ENABLE_THREAD_MEMORY_SAMPLING = "accounting.enable.thread.memory.sampling";
+    public static final Boolean DEFAULT_ENABLE_THREAD_MEMORY_SAMPLING = false;
+
+    public static final String CONFIG_OF_OOM_PROTECTION_KILLING_QUERY = "accounting.oom.enable.killing.query";
+    public static final boolean DEFAULT_ENABLE_OOM_PROTECTION_KILLING_QUERY = false;
+
+    public static final String CONFIG_OF_PUBLISHING_JVM_USAGE = "accounting.publishing.jvm.heap.usage";
+    public static final boolean DEFAULT_PUBLISHING_JVM_USAGE = false;
+
+    public static final String CONFIG_OF_PANIC_LEVEL_HEAP_USAGE_RATIO = "accounting.oom.panic.heap.usage.ratio";
+    public static final float DFAULT_PANIC_LEVEL_HEAP_USAGE_RATIO = 0.99f;
+
+    public static final String CONFIG_OF_CRITICAL_LEVEL_HEAP_USAGE_RATIO = "accounting.oom.critical.heap.usage.ratio";
+    public static final float DEFAULT_CRITICAL_LEVEL_HEAP_USAGE_RATIO = 0.96f;
+
+    public static final String CONFIG_OF_ALARMING_LEVEL_HEAP_USAGE_RATIO = "accounting.oom.alarming.usage.ratio";
+    public static final float DEFAULT_ALARMING_LEVEL_HEAP_USAGE_RATIO = 0.75f;
+
+    public static final String CONFIG_OF_HEAP_USAGE_PUBLISH_PERIOD = "accounting.heap.usage.publish.period";
+    public static final int DEFAULT_HEAP_USAGE_PUBLISH_PERIOD = 5000;
+
+    public static final String CONFIG_OF_SLEEP_TIME = "accounting.sleep.ms";
+    public static final int DEFAULT_SLEEP_TIME = 30;
+
+    public static final String CONFIG_OF_SLEEP_TIME_DENOMINATOR = "accounting.sleep.time.denominator";
+    public static final int DEFAULT_SLEEP_TIME_DENOMINATOR = 3;
+
+    public static final String CONFIG_OF_MIN_MEMORY_FOOTPRINT_TO_KILL_RATIO
+        = "accounting.min.memory.footprint.to.kill.ratio";
+    public static final double DEFAULT_MEMORY_FOOTPRINT_TO_KILL_RATIO = 0.025;
+
+    public static final String CONFIG_OF_GC_BACKOFF_COUNT = "accounting.gc.backoff.count";
+    public static final int DEFAULT_GC_BACKOFF_COUNT = 5;
+  }
+
+  public static class ExecutorService {
+    public static final String PINOT_QUERY_RUNNER_NAME_PREFIX = "pqr-";
+    public static final String PINOT_QUERY_RUNNER_NAME_FORMAT = PINOT_QUERY_RUNNER_NAME_PREFIX + "%d";
+    public static final String PINOT_QUERY_WORKER_NAME_PREFIX = "pqw-";
+    public static final String PINOT_QUERY_WORKER_NAME_FORMAT = PINOT_QUERY_WORKER_NAME_PREFIX + "%d";
   }
 
   public static class Segment {
@@ -646,10 +797,13 @@ public class CommonConstants {
 
     public static final String START_TIME = "segment.start.time";
     public static final String END_TIME = "segment.end.time";
+    public static final String RAW_START_TIME = "segment.start.time.raw";
+    public static final String RAW_END_TIME = "segment.end.time.raw";
     public static final String TIME_UNIT = "segment.time.unit";
     public static final String INDEX_VERSION = "segment.index.version";
     public static final String TOTAL_DOCS = "segment.total.docs";
     public static final String CRC = "segment.crc";
+    public static final String TIER = "segment.tier";
     public static final String CREATION_TIME = "segment.creation.time";
     public static final String PUSH_TIME = "segment.push.time";
     public static final String REFRESH_TIME = "segment.refresh.time";
@@ -674,8 +828,9 @@ public class CommonConstants {
     public static final String METADATA_URI_FOR_PEER_DOWNLOAD = "";
 
     public static class AssignmentStrategy {
-      public static final String BALANCE_NUM_SEGMENT_ASSIGNMENT_STRATEGY = "BalanceNumSegmentAssignmentStrategy";
-      public static final String REPLICA_GROUP_SEGMENT_ASSIGNMENT_STRATEGY = "ReplicaGroupSegmentAssignmentStrategy";
+      public static final String BALANCE_NUM_SEGMENT_ASSIGNMENT_STRATEGY = "balanced";
+      public static final String REPLICA_GROUP_SEGMENT_ASSIGNMENT_STRATEGY = "replicagroup";
+      public static final String DIM_TABLE_SEGMENT_ASSIGNMENT_STRATEGY = "allservers";
     }
 
     public static class BuiltInVirtualColumn {
@@ -683,6 +838,10 @@ public class CommonConstants {
       public static final String HOSTNAME = "$hostName";
       public static final String SEGMENTNAME = "$segmentName";
     }
+  }
+
+  public static class Tier {
+    public static final String BACKEND_PROP_DATA_DIR = "dataDir";
   }
 
   public static class Query {
@@ -716,6 +875,10 @@ public class CommonConstants {
       }
     }
 
+    public static class OptimizationConstants {
+      public static final int DEFAULT_AVG_MV_ENTRIES_DENOMINATOR = 2;
+    }
+
     public static class Range {
       public static final char DELIMITER = '\0';
       public static final char LOWER_EXCLUSIVE = '(';
@@ -726,5 +889,9 @@ public class CommonConstants {
       public static final String LOWER_UNBOUNDED = LOWER_EXCLUSIVE + UNBOUNDED + DELIMITER;
       public static final String UPPER_UNBOUNDED = DELIMITER + UNBOUNDED + UPPER_EXCLUSIVE;
     }
+  }
+
+  public static class IdealState {
+    public static final String HYBRID_TABLE_TIME_BOUNDARY = "HYBRID_TABLE_TIME_BOUNDARY";
   }
 }

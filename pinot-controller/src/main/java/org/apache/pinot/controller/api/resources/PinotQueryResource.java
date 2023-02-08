@@ -45,6 +45,7 @@ import javax.ws.rs.QueryParam;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.HttpHeaders;
 import org.apache.calcite.sql.SqlNode;
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.helix.model.InstanceConfig;
 import org.apache.pinot.common.Utils;
@@ -55,8 +56,8 @@ import org.apache.pinot.controller.ControllerConf;
 import org.apache.pinot.controller.api.access.AccessControl;
 import org.apache.pinot.controller.api.access.AccessControlFactory;
 import org.apache.pinot.controller.api.access.AccessType;
-import org.apache.pinot.controller.api.access.ManualAuthorization;
 import org.apache.pinot.controller.helix.core.PinotHelixResourceManager;
+import org.apache.pinot.core.auth.ManualAuthorization;
 import org.apache.pinot.core.query.executor.sql.SqlQueryExecutor;
 import org.apache.pinot.spi.utils.CommonConstants;
 import org.apache.pinot.spi.utils.CommonConstants.Broker.Request.QueryOptionKey;
@@ -314,7 +315,8 @@ public class PinotQueryResource {
         LOGGER.info("The http response code is " + responseCode);
       }*/
       if (responseCode != HttpURLConnection.HTTP_OK) {
-        throw new IOException("Failed : HTTP error code : " + responseCode);
+        throw new IOException("Failed : HTTP error code : " + responseCode + ". Root Cause: "
+            + IOUtils.toString(conn.getErrorStream(), StandardCharsets.UTF_8));
       }
       final byte[] bytes = drain(new BufferedInputStream(conn.getInputStream()));
 

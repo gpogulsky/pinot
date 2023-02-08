@@ -22,8 +22,10 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.RandomAccessFile;
 import java.nio.ByteOrder;
@@ -41,9 +43,11 @@ import org.apache.commons.configuration.PropertiesConfiguration;
 import org.apache.commons.io.FileUtils;
 import org.apache.pinot.segment.spi.V1Constants;
 import org.apache.pinot.segment.spi.index.metadata.SegmentMetadataImpl;
+import org.apache.pinot.segment.spi.index.startree.StarTreeV2Constants;
 import org.apache.pinot.segment.spi.memory.PinotDataBuffer;
 import org.apache.pinot.segment.spi.store.ColumnIndexDirectory;
 import org.apache.pinot.segment.spi.store.ColumnIndexType;
+import org.apache.pinot.segment.spi.store.ColumnIndexUtils;
 import org.apache.pinot.spi.env.CommonsConfigurationUtils;
 import org.apache.pinot.spi.utils.ReadMode;
 import org.slf4j.Logger;
@@ -70,9 +74,6 @@ class SingleFileIndexDirectory extends ColumnIndexDirectory {
 
   private static final long MAGIC_MARKER = 0xdeadbeefdeafbeadL;
   private static final int MAGIC_MARKER_SIZE_BYTES = 8;
-  private static final String MAP_KEY_SEPARATOR = ".";
-  private static final String MAP_KEY_NAME_START_OFFSET = "startOffset";
-  private static final String MAP_KEY_NAME_SIZE = "size";
 
   // Max size of buffer we want to allocate
   // ByteBuffer limits the size to 2GB - (some platform dependent size)
@@ -86,6 +87,9 @@ class SingleFileIndexDirectory extends ColumnIndexDirectory {
   private final File _indexFile;
   private final Map<IndexKey, IndexEntry> _columnEntries;
   private final List<PinotDataBuffer> _allocBuffers;
+  // Different from the other column-index entries, starTree index is multi-column index and has its own index map,
+  // thus manage it separately.
+  private PinotDataBuffer _starTreeIndexDataBuffer;
 
   // For V3 segment format, the index cleanup consists of two steps: mark and sweep.
   // The removeIndex() method marks an index to be removed; and the index info is
@@ -209,6 +213,21 @@ class SingleFileIndexDirectory extends ColumnIndexDirectory {
       throws IOException, ConfigurationException {
     loadMap();
     mapBufferEntries();
+    if (_segmentMetadata.getStarTreeV2MetadataList() != null) {
+      loadStarTreeIndex();
+    }
+  }
+
+  private void loadStarTreeIndex()
+      throws IOException {
+    File indexFile = new File(_segmentDirectory, StarTreeV2Constants.INDEX_FILE_NAME);
+    if (_readMode == ReadMode.heap) {
+      _starTreeIndexDataBuffer =
+          PinotDataBuffer.loadFile(indexFile, 0, indexFile.length(), ByteOrder.BIG_ENDIAN, "Star-tree V2 data buffer");
+    } else {
+      _starTreeIndexDataBuffer = PinotDataBuffer.mapFile(indexFile, true, 0, indexFile.length(), ByteOrder.BIG_ENDIAN,
+          "Star-tree V2 data buffer");
+    }
   }
 
   private void loadMap()
@@ -218,29 +237,17 @@ class SingleFileIndexDirectory extends ColumnIndexDirectory {
     PropertiesConfiguration mapConfig = CommonsConfigurationUtils.fromFile(mapFile);
 
     for (String key : CommonsConfigurationUtils.getKeys(mapConfig)) {
-      // column names can have '.' in it hence scan from backwards
-      // parsing names like "column.name.dictionary.startOffset"
-      // or, "column.name.dictionary.endOffset" where column.name is the key
-      int lastSeparatorPos = key.lastIndexOf(MAP_KEY_SEPARATOR);
-      Preconditions
-          .checkState(lastSeparatorPos != -1, "Key separator not found: " + key + ", segment: " + _segmentDirectory);
-      String propertyName = key.substring(lastSeparatorPos + 1);
-
-      int indexSeparatorPos = key.lastIndexOf(MAP_KEY_SEPARATOR, lastSeparatorPos - 1);
-      Preconditions.checkState(indexSeparatorPos != -1,
-          "Index separator not found: " + key + " , segment: " + _segmentDirectory);
-      String indexName = key.substring(indexSeparatorPos + 1, lastSeparatorPos);
-      String columnName = key.substring(0, indexSeparatorPos);
-      IndexKey indexKey = new IndexKey(columnName, ColumnIndexType.getValue(indexName));
+      String[] parsedKeys = ColumnIndexUtils.parseIndexMapKeys(key, _segmentDirectory.getPath());
+      IndexKey indexKey = new IndexKey(parsedKeys[0], ColumnIndexType.getValue(parsedKeys[1]));
       IndexEntry entry = _columnEntries.get(indexKey);
       if (entry == null) {
         entry = new IndexEntry(indexKey);
         _columnEntries.put(indexKey, entry);
       }
 
-      if (propertyName.equals(MAP_KEY_NAME_START_OFFSET)) {
+      if (parsedKeys[2].equals(ColumnIndexUtils.MAP_KEY_NAME_START_OFFSET)) {
         entry._startOffset = mapConfig.getLong(key);
-      } else if (propertyName.equals(MAP_KEY_NAME_SIZE)) {
+      } else if (parsedKeys[2].equals(ColumnIndexUtils.MAP_KEY_NAME_SIZE)) {
         entry._size = mapConfig.getLong(key);
       } else {
         throw new ConfigurationException(
@@ -360,6 +367,9 @@ class SingleFileIndexDirectory extends ColumnIndexDirectory {
     for (PinotDataBuffer buf : _allocBuffers) {
       buf.close();
     }
+    if (_starTreeIndexDataBuffer != null) {
+      _starTreeIndexDataBuffer.close();
+    }
     // Cleanup removed indices after closing and flushing buffers, so
     // that potential index updates can be persisted across cleanups.
     if (_shouldCleanupRemovedIndices) {
@@ -404,6 +414,18 @@ class SingleFileIndexDirectory extends ColumnIndexDirectory {
   }
 
   @Override
+  public PinotDataBuffer getStarTreeIndex()
+      throws IOException {
+    return _starTreeIndexDataBuffer;
+  }
+
+  @Override
+  public InputStream getStarTreeIndexMap()
+      throws IOException {
+    return new FileInputStream(new File(_segmentDirectory, StarTreeV2Constants.INDEX_MAP_FILE_NAME));
+  }
+
+  @Override
   public String toString() {
     return _segmentDirectory.toString() + "/" + _indexFile.toString();
   }
@@ -439,7 +461,8 @@ class SingleFileIndexDirectory extends ColumnIndexDirectory {
   }
 
   private static String getKey(String column, String indexName, boolean isStartOffset) {
-    return column + MAP_KEY_SEPARATOR + indexName + MAP_KEY_SEPARATOR + (isStartOffset ? "startOffset" : "size");
+    return column + ColumnIndexUtils.MAP_KEY_SEPARATOR + indexName + ColumnIndexUtils.MAP_KEY_SEPARATOR
+        + (isStartOffset ? "startOffset" : "size");
   }
 
   @VisibleForTesting

@@ -29,7 +29,10 @@ import javax.annotation.Nullable;
 import org.apache.pinot.spi.config.BaseJsonConfig;
 import org.apache.pinot.spi.config.table.assignment.InstanceAssignmentConfig;
 import org.apache.pinot.spi.config.table.assignment.InstancePartitionsType;
+import org.apache.pinot.spi.config.table.assignment.SegmentAssignmentConfig;
 import org.apache.pinot.spi.config.table.ingestion.IngestionConfig;
+import org.apache.pinot.spi.stream.StreamConfig;
+import org.apache.pinot.spi.utils.IngestionConfigUtils;
 import org.apache.pinot.spi.utils.builder.TableNameBuilder;
 
 
@@ -48,9 +51,11 @@ public class TableConfig extends BaseJsonConfig {
   public static final String QUERY_CONFIG_KEY = "query";
   public static final String INSTANCE_ASSIGNMENT_CONFIG_MAP_KEY = "instanceAssignmentConfigMap";
   public static final String INSTANCE_PARTITIONS_MAP_CONFIG_KEY = "instancePartitionsMap";
+  public static final String SEGMENT_ASSIGNMENT_CONFIG_MAP_KEY = "segmentAssignmentConfigMap";
   public static final String FIELD_CONFIG_LIST_KEY = "fieldConfigList";
   public static final String UPSERT_CONFIG_KEY = "upsertConfig";
   public static final String DEDUP_CONFIG_KEY = "dedupConfig";
+  public static final String DIMENSION_TABLE_CONFIG_KEY = "dimensionTableConfig";
   public static final String INGESTION_CONFIG_KEY = "ingestionConfig";
   public static final String TIER_CONFIGS_LIST_KEY = "tierConfigs";
   public static final String TUNER_CONFIG_LIST_KEY = "tunerConfigs";
@@ -89,6 +94,7 @@ public class TableConfig extends BaseJsonConfig {
   @JsonPropertyDescription(value = "Point to an existing instance partitions")
   private Map<InstancePartitionsType, String> _instancePartitionsMap;
 
+  private Map<String, SegmentAssignmentConfig> _segmentAssignmentConfigMap;
   private List<FieldConfig> _fieldConfigList;
 
   @JsonPropertyDescription(value = "upsert related config")
@@ -96,6 +102,9 @@ public class TableConfig extends BaseJsonConfig {
 
   @JsonPropertyDescription(value = "Dedup related config")
   private DedupConfig _dedupConfig;
+
+  @JsonPropertyDescription(value = "Dimension Table related config")
+  private DimensionTableConfig _dimensionTableConfig;
 
   @JsonPropertyDescription(value = "Config related to ingesting data into the table")
   private IngestionConfig _ingestionConfig;
@@ -123,12 +132,15 @@ public class TableConfig extends BaseJsonConfig {
       @JsonProperty(FIELD_CONFIG_LIST_KEY) @Nullable List<FieldConfig> fieldConfigList,
       @JsonProperty(UPSERT_CONFIG_KEY) @Nullable UpsertConfig upsertConfig,
       @JsonProperty(DEDUP_CONFIG_KEY) @Nullable DedupConfig dedupConfig,
+      @JsonProperty(DIMENSION_TABLE_CONFIG_KEY) @Nullable DimensionTableConfig dimensionTableConfig,
       @JsonProperty(INGESTION_CONFIG_KEY) @Nullable IngestionConfig ingestionConfig,
       @JsonProperty(TIER_CONFIGS_LIST_KEY) @Nullable List<TierConfig> tierConfigsList,
       @JsonProperty(IS_DIM_TABLE_KEY) boolean dimTable,
       @JsonProperty(TUNER_CONFIG_LIST_KEY) @Nullable List<TunerConfig> tunerConfigList,
       @JsonProperty(INSTANCE_PARTITIONS_MAP_CONFIG_KEY) @Nullable
-          Map<InstancePartitionsType, String> instancePartitionsMap) {
+          Map<InstancePartitionsType, String> instancePartitionsMap,
+      @JsonProperty(SEGMENT_ASSIGNMENT_CONFIG_MAP_KEY) @Nullable
+          Map<String, SegmentAssignmentConfig> segmentAssignmentConfigMap) {
     Preconditions.checkArgument(tableName != null, "'tableName' must be configured");
     Preconditions.checkArgument(!tableName.contains(TABLE_NAME_FORBIDDEN_SUBSTRING),
         "'tableName' cannot contain double underscore ('__')");
@@ -153,11 +165,13 @@ public class TableConfig extends BaseJsonConfig {
     _fieldConfigList = fieldConfigList;
     _upsertConfig = upsertConfig;
     _dedupConfig = dedupConfig;
+    _dimensionTableConfig = dimensionTableConfig;
     _ingestionConfig = ingestionConfig;
     _tierConfigsList = tierConfigsList;
     _dimTable = dimTable;
     _tunerConfigList = tunerConfigList;
     _instancePartitionsMap = instancePartitionsMap;
+    _segmentAssignmentConfigMap = segmentAssignmentConfigMap;
   }
 
   @JsonProperty(TABLE_NAME_KEY)
@@ -299,6 +313,20 @@ public class TableConfig extends BaseJsonConfig {
     _dedupConfig = dedupConfig;
   }
 
+  @JsonIgnore
+  public boolean isDedupEnabled() {
+    return _dedupConfig != null && _dedupConfig.isDedupEnabled();
+  }
+
+  @Nullable
+  public DimensionTableConfig getDimensionTableConfig() {
+    return _dimensionTableConfig;
+  }
+
+  public void setDimensionTableConfig(DimensionTableConfig dimensionTableConfig) {
+    _dimensionTableConfig = dimensionTableConfig;
+  }
+
   @JsonProperty(INGESTION_CONFIG_KEY)
   @Nullable
   public IngestionConfig getIngestionConfig() {
@@ -325,6 +353,11 @@ public class TableConfig extends BaseJsonConfig {
   }
 
   @JsonIgnore
+  public boolean isUpsertEnabled() {
+    return _upsertConfig != null && _upsertConfig.getMode() != UpsertConfig.Mode.NONE;
+  }
+
+  @JsonIgnore
   @Nullable
   public String getUpsertComparisonColumn() {
     return _upsertConfig == null ? null : _upsertConfig.getComparisonColumn();
@@ -337,5 +370,41 @@ public class TableConfig extends BaseJsonConfig {
 
   public void setTunerConfigsList(List<TunerConfig> tunerConfigList) {
     _tunerConfigList = tunerConfigList;
+  }
+
+  @JsonProperty(SEGMENT_ASSIGNMENT_CONFIG_MAP_KEY)
+  @Nullable
+  public Map<String, SegmentAssignmentConfig> getSegmentAssignmentConfigMap() {
+    return _segmentAssignmentConfigMap;
+  }
+
+  public void setSegmentAssignmentConfigMap(Map<String, SegmentAssignmentConfig> segmentAssignmentConfigMap) {
+    _segmentAssignmentConfigMap = segmentAssignmentConfigMap;
+  }
+
+  @JsonIgnore
+  public int getReplication() {
+    int replication = 0;
+    if (_tableType == TableType.REALTIME) {
+      StreamConfig streamConfig = new StreamConfig(_tableName, IngestionConfigUtils.getStreamConfigMap(this));
+      if (streamConfig.hasHighLevelConsumerType()) {
+        // In case of HLC, we read from "replication"
+        replication = Integer.parseInt(_validationConfig.getReplication());
+      } else {
+        // To keep the backward compatibility, we read from "replicasPerPartition" in case of LLC
+        String replicasPerPartitionStr = _validationConfig.getReplicasPerPartition();
+        try {
+          replication = Integer.parseInt(replicasPerPartitionStr);
+        } catch (NumberFormatException e) {
+          // If numReplicasPerPartition is not being used or specified, read the value from replication
+          String replicationStr = _validationConfig.getReplication();
+          replication = Integer.parseInt(replicationStr);
+        }
+      }
+    } else {
+      // In case of OFFLINE tables, we read from "replication"
+      replication = Integer.parseInt(_validationConfig.getReplication());
+    }
+    return replication;
   }
 }

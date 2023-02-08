@@ -34,7 +34,6 @@ import org.apache.pinot.common.restlet.resources.SegmentErrorInfo;
 import org.apache.pinot.segment.local.segment.index.loader.IndexLoadingConfig;
 import org.apache.pinot.segment.spi.ImmutableSegment;
 import org.apache.pinot.segment.spi.SegmentMetadata;
-import org.apache.pinot.spi.config.table.TableConfig;
 import org.apache.pinot.spi.data.Schema;
 
 
@@ -78,7 +77,7 @@ public interface TableDataManager {
    * Adds a segment into the REALTIME table.
    * <p>The segment could be committed or under consuming.
    */
-  void addSegment(String segmentName, TableConfig tableConfig, IndexLoadingConfig indexLoadingConfig)
+  void addSegment(String segmentName, IndexLoadingConfig indexLoadingConfig, SegmentZKMetadata zkMetadata)
       throws Exception;
 
   /**
@@ -86,6 +85,8 @@ public interface TableDataManager {
    * A new segment may be downloaded if the local one has a different CRC; or can be forced to download
    * if forceDownload flag is true. This operation is conducted within a failure handling framework
    * and made transparent to ongoing queries, because the segment is in online serving state.
+   *
+   * TODO: Clean up this method to use the schema from the IndexLoadingConfig
    *
    * @param segmentName the segment to reload
    * @param indexLoadingConfig the latest table config to load segment
@@ -124,6 +125,11 @@ public interface TableDataManager {
   void removeSegment(String segmentName);
 
   /**
+   * Returns true if the segment was deleted in the last few minutes.
+   */
+  boolean isSegmentDeletedRecently(String segmentName);
+
+  /**
    * Acquires all segments of the table.
    * <p>It is the caller's responsibility to return the segments by calling {@link #releaseSegment(SegmentDataManager)}.
    *
@@ -134,6 +140,8 @@ public interface TableDataManager {
   /**
    * Acquires the segments with the given segment names.
    * <p>It is the caller's responsibility to return the segments by calling {@link #releaseSegment(SegmentDataManager)}.
+   * This method may return some recently deleted segments in missingSegments. The caller can identify those segments
+   * by using {@link #isSegmentDeletedRecently(String)}.
    *
    * @param segmentNames List of names of the segment to acquire
    * @param missingSegments Holder for segments unable to be acquired
@@ -172,6 +180,11 @@ public interface TableDataManager {
    * Returns the dir which contains the data segments.
    */
   File getTableDataDir();
+
+  /**
+   * Returns the config for the table data manager.
+   */
+  TableDataManagerConfig getTableDataManagerConfig();
 
   /**
    * Add error related to segment, if any. The implementation

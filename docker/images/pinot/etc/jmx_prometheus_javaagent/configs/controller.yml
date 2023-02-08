@@ -94,6 +94,12 @@ rules:
   labels:
     table: "$1"
     taskType: "$2"
+- pattern: "\"org.apache.pinot.common.metrics\"<type=\"ControllerMetrics\", name=\"pinot.controller.(\\w+)\\.(\\w+).cronSchedulerSkipped\"><>(\\w+)"
+  name: "pinot_controller_cronSchedulerSkipped_$3"
+  cache: true
+  labels:
+    table: "$1"
+    taskType: "$2"
 - pattern: "\"org.apache.pinot.common.metrics\"<type=\"ControllerMetrics\", name=\"pinot.controller.(\\w+)\\.(\\w+).cronSchedulerJobExecutionTimeMs\"><>(\\w+)"
   name: "pinot_controller_cronSchedulerJobExecutionTimeMs_$3"
   cache: true
@@ -106,6 +112,27 @@ rules:
   labels:
     taskType: "$1"
     status: "$2"
+- pattern: "\"org.apache.pinot.common.metrics\"<type=\"ControllerMetrics\", name=\"pinot.controller.timeMsSinceLastMinionTaskMetadataUpdate.(\\w+)_(\\w+)\\.(\\w+)\"><>(\\w+)"
+  name: "pinot_controller_timeMsSinceLastMinionTaskMetadataUpdate_$4"
+  cache: true
+  labels:
+    table: "$1"
+    tableType: "$2"
+    taskType: "$3"
+- pattern: "\"org.apache.pinot.common.metrics\"<type=\"ControllerMetrics\", name=\"pinot.controller.timeMsSinceLastSuccessfulMinionTaskGeneration.(\\w+)_(\\w+)\\.(\\w+)\"><>(\\w+)"
+  name: "pinot_controller_timeMsSinceLastSuccessfulMinionTaskGeneration_$4"
+  cache: true
+  labels:
+    table: "$1"
+    tableType: "$2"
+    taskType: "$3"
+- pattern: "\"org.apache.pinot.common.metrics\"<type=\"ControllerMetrics\", name=\"pinot.controller.lastMinionTaskGenerationEncountersError.(\\w+)_(\\w+)\\.(\\w+)\"><>(\\w+)"
+  name: "pinot_controller_lastMinionTaskGenerationEncountersError_$4"
+  cache: true
+  labels:
+    table: "$1"
+    tableType: "$2"
+    taskType: "$3"
 - pattern: "\"org.apache.pinot.common.metrics\"<type=\"ControllerMetrics\", name=\"pinot.controller.pinotLeadControllerResourceEnabled\"><>(\\w+)"
   name: "pinot_controller_pinotLeadControllerResourceEnabled_$1"
   cache: true
@@ -154,3 +181,8 @@ rules:
   labels:
     table: "$1"
     tableType: "$2"
+- pattern: "\"org.apache.pinot.common.metrics\"<type=\"ControllerMetrics\", name=\"pinot.controller.version.(\\w+)\"><>(\\w+)"
+  name: "pinot_controller_version"
+  cache: true
+  labels:
+    version: "$1"

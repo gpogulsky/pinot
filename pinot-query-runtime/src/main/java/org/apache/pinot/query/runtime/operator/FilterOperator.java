@@ -21,28 +21,41 @@ package org.apache.pinot.query.runtime.operator;
 import java.util.ArrayList;
 import java.util.List;
 import javax.annotation.Nullable;
+import org.apache.pinot.common.datablock.DataBlock;
 import org.apache.pinot.common.utils.DataSchema;
 import org.apache.pinot.core.common.Operator;
-import org.apache.pinot.core.common.datablock.BaseDataBlock;
-import org.apache.pinot.core.common.datablock.DataBlockUtils;
 import org.apache.pinot.core.operator.BaseOperator;
 import org.apache.pinot.query.planner.logical.RexExpression;
 import org.apache.pinot.query.runtime.blocks.TransferableBlock;
 import org.apache.pinot.query.runtime.blocks.TransferableBlockUtils;
-import org.apache.pinot.query.runtime.operator.operands.FilterOperand;
+import org.apache.pinot.query.runtime.operator.operands.TransformOperand;
+import org.apache.pinot.query.runtime.operator.utils.FunctionInvokeUtils;
 
 
+/*
+   FilterOperator apply filter on rows from upstreamOperator.
+   There are three types of filter operands
+   1) inputRef
+   2) Literal
+   3) FunctionOperand
+   All three types' result has to be a boolean to be used to filter rows.
+   FunctionOperand supports,
+    1) AND, OR, NOT functions to combine operands.
+    2) Binary Operand: equals, notEquals, greaterThan, greaterThanOrEqual, lessThan, lessThanOrEqual
+    3) All boolean scalar functions we have that take tranformOperand.
+    Note: Scalar functions are the ones we have in v1 engine and only do function name and arg # matching.
+ */
 public class FilterOperator extends BaseOperator<TransferableBlock> {
   private static final String EXPLAIN_NAME = "FILTER";
-  private final BaseOperator<TransferableBlock> _upstreamOperator;
-  private final FilterOperand _filterOperand;
+  private final Operator<TransferableBlock> _upstreamOperator;
+  private final TransformOperand _filterOperand;
   private final DataSchema _dataSchema;
   private TransferableBlock _upstreamErrorBlock;
 
-  public FilterOperator(BaseOperator<TransferableBlock> upstreamOperator, DataSchema dataSchema, RexExpression filter) {
+  public FilterOperator(Operator<TransferableBlock> upstreamOperator, DataSchema dataSchema, RexExpression filter) {
     _upstreamOperator = upstreamOperator;
     _dataSchema = dataSchema;
-    _filterOperand = FilterOperand.toFilterOperand(filter, dataSchema);
+    _filterOperand = TransformOperand.toTransformOperand(filter, dataSchema);
     _upstreamErrorBlock = null;
   }
 
@@ -67,25 +80,25 @@ public class FilterOperator extends BaseOperator<TransferableBlock> {
     }
   }
 
+  @SuppressWarnings("ConstantConditions")
   private TransferableBlock transform(TransferableBlock block)
       throws Exception {
     if (_upstreamErrorBlock != null) {
       return _upstreamErrorBlock;
-    }
-    if (!TransferableBlockUtils.isEndOfStream(block)) {
-      List<Object[]> resultRows = new ArrayList<>();
-      List<Object[]> container = block.getContainer();
-      for (Object[] row : container) {
-        if (_filterOperand.apply(row)) {
-          resultRows.add(row);
-        }
-      }
-      return new TransferableBlock(resultRows, _dataSchema, BaseDataBlock.Type.ROW);
     } else if (block.isErrorBlock()) {
       _upstreamErrorBlock = block;
       return _upstreamErrorBlock;
-    } else {
-      return new TransferableBlock(DataBlockUtils.getEndOfStreamDataBlock(_dataSchema));
+    } else if (TransferableBlockUtils.isEndOfStream(block) || TransferableBlockUtils.isNoOpBlock(block)) {
+      return block;
     }
+
+    List<Object[]> resultRows = new ArrayList<>();
+    List<Object[]> container = block.getContainer();
+    for (Object[] row : container) {
+      if ((Boolean) FunctionInvokeUtils.convert(_filterOperand.apply(row), DataSchema.ColumnDataType.BOOLEAN)) {
+        resultRows.add(row);
+      }
+    }
+    return new TransferableBlock(resultRows, _dataSchema, DataBlock.Type.ROW);
   }
 }

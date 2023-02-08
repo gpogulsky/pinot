@@ -43,7 +43,8 @@ public class ChannelManager {
 
   public ChannelManager(GrpcMailboxService mailboxService, PinotConfiguration extraConfig) {
     _mailboxService = mailboxService;
-    _grpcMailboxServer = new GrpcMailboxServer(_mailboxService, _mailboxService.getMailboxPort(), extraConfig);
+    _grpcMailboxServer = new GrpcMailboxServer(
+        _mailboxService, _mailboxService.getMailboxPort(), extraConfig);
   }
 
   public void init() {
@@ -62,7 +63,7 @@ public class ChannelManager {
   private static ManagedChannel constructChannel(String[] channelParts) {
     ManagedChannelBuilder<?> managedChannelBuilder = ManagedChannelBuilder
         .forAddress(channelParts[0], Integer.parseInt(channelParts[1]))
-        .maxInboundMessageSize(QueryConfig.DEFAULT_MAX_INBOUND_QUERY_DATA_BLOCK_BYTES_SIZE)
+        .maxInboundMessageSize(QueryConfig.DEFAULT_MAX_INBOUND_QUERY_DATA_BLOCK_SIZE_BYTES)
         .usePlaintext();
     return managedChannelBuilder.build();
   }

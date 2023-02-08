@@ -36,6 +36,7 @@ public enum ServerMeter implements AbstractMetrics.Meter {
   DELETE_TABLE_FAILURES("tables", false),
   REALTIME_ROWS_CONSUMED("rows", true),
   INVALID_REALTIME_ROWS_DROPPED("rows", false),
+  INCOMPLETE_REALTIME_ROWS_CONSUMED("rows", false),
   REALTIME_CONSUMPTION_EXCEPTIONS("exceptions", true),
   REALTIME_OFFSET_COMMITS("commits", true),
   REALTIME_OFFSET_COMMIT_EXCEPTIONS("exceptions", false),
@@ -70,12 +71,15 @@ public enum ServerMeter implements AbstractMetrics.Meter {
   SEGMENT_STREAMED_DOWNLOAD_UNTAR_FAILURES("segments", false),
   SEGMENT_DIR_MOVEMENT_FAILURES("segments", false),
   SEGMENT_DOWNLOAD_FAILURES("segments", false),
+  SEGMENT_DOWNLOAD_FROM_REMOTE_FAILURES("segments", false),
+  SEGMENT_DOWNLOAD_FROM_PEERS_FAILURES("segments", false),
   NUM_RESIZES("numResizes", false),
   NO_TABLE_ACCESS("tables", true),
   INDEXING_FAILURES("attributeValues", true),
 
   READINESS_CHECK_OK_CALLS("readinessCheck", true),
   READINESS_CHECK_BAD_CALLS("readinessCheck", true),
+  QUERIES_PREEMPTED("query", true),
 
   // Netty connection metrics
   NETTY_CONNECTION_BYTES_RECEIVED("nettyConnection", true),

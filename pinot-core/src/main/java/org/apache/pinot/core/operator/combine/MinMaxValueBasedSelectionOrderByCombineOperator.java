@@ -60,21 +60,22 @@ public class MinMaxValueBasedSelectionOrderByCombineOperator extends BaseCombine
 
   private static final String EXPLAIN_NAME = "COMBINE_SELECT_ORDERBY_MINMAX";
 
-  // For min/max value based combine, when a thread detects that no more segments need to be processed, it inserts this
-  // special IntermediateResultsBlock into the BlockingQueue to awake the main thread
-  private static final BaseResultsBlock LAST_RESULTS_BLOCK =
+  // For min/max value based combine, when a thread detects that no more segment needs to be processed, it inserts this
+  // special results block, which can be skipped during the merge phase
+  private static final BaseResultsBlock EMPTY_RESULTS_BLOCK =
       new SelectionResultsBlock(new DataSchema(new String[0], new DataSchema.ColumnDataType[0]),
           Collections.emptyList());
 
-  // Use an AtomicInteger to track the number of operators skipped (no result inserted into the BlockingQueue)
-  private final AtomicInteger _numOperatorsSkipped = new AtomicInteger();
-  private final AtomicReference<Comparable> _globalBoundaryValue = new AtomicReference<>();
+  // Use an AtomicInteger to track the end operator id, beyond which no operator needs to be processed
+  private final AtomicInteger _endOperatorId;
   private final int _numRowsToKeep;
   private final List<MinMaxValueContext> _minMaxValueContexts;
+  private final AtomicReference<Comparable> _globalBoundaryValue = new AtomicReference<>();
 
   MinMaxValueBasedSelectionOrderByCombineOperator(List<Operator> operators, QueryContext queryContext,
       ExecutorService executorService) {
     super(operators, queryContext, executorService);
+    _endOperatorId = new AtomicInteger(_numOperators);
     _numRowsToKeep = queryContext.getLimit() + queryContext.getOffset();
 
     List<OrderByExpressionContext> orderByExpressions = _queryContext.getOrderByExpressions();
@@ -129,7 +130,7 @@ public class MinMaxValueBasedSelectionOrderByCombineOperator extends BaseCombine
    * documents to fulfill the LIMIT and OFFSET requirement.
    */
   @Override
-  protected void processSegments(int taskIndex) {
+  protected void processSegments() {
     List<OrderByExpressionContext> orderByExpressions = _queryContext.getOrderByExpressions();
     assert orderByExpressions != null;
     int numOrderByExpressions = orderByExpressions.size();
@@ -144,7 +145,13 @@ public class MinMaxValueBasedSelectionOrderByCombineOperator extends BaseCombine
     //       segment result is merged.
     Comparable threadBoundaryValue = null;
 
-    for (int operatorIndex = taskIndex; operatorIndex < _numOperators; operatorIndex += _numTasks) {
+    int operatorId;
+    while ((operatorId = _nextOperatorId.getAndIncrement()) < _numOperators) {
+      if (operatorId >= _endOperatorId.get()) {
+        _blockingQueue.offer(EMPTY_RESULTS_BLOCK);
+        continue;
+      }
+
       // Calculate the boundary value from global boundary and thread boundary
       Comparable boundaryValue = _globalBoundaryValue.get();
       if (boundaryValue == null) {
@@ -164,7 +171,7 @@ public class MinMaxValueBasedSelectionOrderByCombineOperator extends BaseCombine
       }
 
       // Check if the segment can be skipped
-      MinMaxValueContext minMaxValueContext = _minMaxValueContexts.get(operatorIndex);
+      MinMaxValueContext minMaxValueContext = _minMaxValueContexts.get(operatorId);
       if (boundaryValue != null) {
         if (asc) {
           // For ascending order, no need to process more segments if the column min value is larger than the
@@ -172,9 +179,9 @@ public class MinMaxValueBasedSelectionOrderByCombineOperator extends BaseCombine
           if (minMaxValueContext._minValue != null) {
             int result = minMaxValueContext._minValue.compareTo(boundaryValue);
             if (result > 0 || (result == 0 && numOrderByExpressions == 1)) {
-              _numOperatorsSkipped.getAndAdd((_numOperators - operatorIndex - 1) / _numTasks);
-              _blockingQueue.offer(LAST_RESULTS_BLOCK);
-              return;
+              _endOperatorId.set(operatorId);
+              _blockingQueue.offer(EMPTY_RESULTS_BLOCK);
+              continue;
             }
           }
         } else {
@@ -183,9 +190,9 @@ public class MinMaxValueBasedSelectionOrderByCombineOperator extends BaseCombine
           if (minMaxValueContext._maxValue != null) {
             int result = minMaxValueContext._maxValue.compareTo(boundaryValue);
             if (result < 0 || (result == 0 && numOrderByExpressions == 1)) {
-              _numOperatorsSkipped.getAndAdd((_numOperators - operatorIndex - 1) / _numTasks);
-              _blockingQueue.offer(LAST_RESULTS_BLOCK);
-              return;
+              _endOperatorId.set(operatorId);
+              _blockingQueue.offer(EMPTY_RESULTS_BLOCK);
+              continue;
             }
           }
         }
@@ -204,11 +211,21 @@ public class MinMaxValueBasedSelectionOrderByCombineOperator extends BaseCombine
           ((AcquireReleaseColumnsSegmentOperator) operator).release();
         }
       }
-      PriorityQueue<Object[]> selectionResult = (PriorityQueue<Object[]>) resultsBlock.getRows();
-      if (selectionResult != null && selectionResult.size() == _numRowsToKeep) {
+      Collection<Object[]> rows = resultsBlock.getRows();
+      if (rows != null && rows.size() >= _numRowsToKeep) {
         // Segment result has enough rows, update the boundary value
-        assert selectionResult.peek() != null;
-        Comparable segmentBoundaryValue = (Comparable) selectionResult.peek()[0];
+
+        Comparable segmentBoundaryValue;
+        if (rows instanceof PriorityQueue) {
+          // Results from SelectionOrderByOperator
+          assert ((PriorityQueue<Object[]>) rows).peek() != null;
+          segmentBoundaryValue = (Comparable) ((PriorityQueue<Object[]>) rows).peek()[0];
+        } else {
+          // Results from LinearSelectionOrderByOperator
+          assert rows instanceof List;
+          segmentBoundaryValue = (Comparable) ((List<Object[]>) rows).get(rows.size() - 1)[0];
+        }
+
         if (boundaryValue == null) {
           boundaryValue = segmentBoundaryValue;
         } else {
@@ -247,7 +264,7 @@ public class MinMaxValueBasedSelectionOrderByCombineOperator extends BaseCombine
     SelectionResultsBlock mergedBlock = null;
     int numBlocksMerged = 0;
     long endTimeMs = _queryContext.getEndTimeMs();
-    while (numBlocksMerged + _numOperatorsSkipped.get() < _numOperators) {
+    while (numBlocksMerged < _numOperators) {
       BaseResultsBlock blockToMerge =
           _blockingQueue.poll(endTimeMs - System.currentTimeMillis(), TimeUnit.MILLISECONDS);
       if (blockToMerge == null) {
@@ -257,22 +274,24 @@ public class MinMaxValueBasedSelectionOrderByCombineOperator extends BaseCombine
         return new ExceptionResultsBlock(QueryException.getException(QueryException.EXECUTION_TIMEOUT_ERROR,
             new TimeoutException("Timed out while polling results block")));
       }
+      if (blockToMerge == EMPTY_RESULTS_BLOCK) {
+        numBlocksMerged++;
+        continue;
+      }
       if (blockToMerge.getProcessingExceptions() != null) {
         // Caught exception while processing segment, skip merging the remaining results blocks and directly return
         // the exception
         return blockToMerge;
       }
       if (mergedBlock == null) {
-        mergedBlock = (SelectionResultsBlock) blockToMerge;
+        mergedBlock = convertToMergeableBlock((SelectionResultsBlock) blockToMerge);
       } else {
-        if (blockToMerge != LAST_RESULTS_BLOCK) {
-          mergeResultsBlocks(mergedBlock, (SelectionResultsBlock) blockToMerge);
-        }
+        mergeResultsBlocks(mergedBlock, (SelectionResultsBlock) blockToMerge);
       }
       numBlocksMerged++;
 
       // Update the boundary value if enough rows are collected
-      PriorityQueue<Object[]> selectionResult = (PriorityQueue<Object[]>) mergedBlock.getRows();
+      PriorityQueue<Object[]> selectionResult = mergedBlock.getRowsAsPriorityQueue();
       if (selectionResult != null && selectionResult.size() == _numRowsToKeep) {
         assert selectionResult.peek() != null;
         _globalBoundaryValue.set((Comparable) selectionResult.peek()[0]);
@@ -297,10 +316,17 @@ public class MinMaxValueBasedSelectionOrderByCombineOperator extends BaseCombine
       return;
     }
 
-    PriorityQueue<Object[]> mergedRows = (PriorityQueue<Object[]>) mergedBlock.getRows();
+    PriorityQueue<Object[]> mergedRows = mergedBlock.getRowsAsPriorityQueue();
     Collection<Object[]> rowsToMerge = blockToMerge.getRows();
     assert mergedRows != null && rowsToMerge != null;
     SelectionOperatorUtils.mergeWithOrdering(mergedRows, rowsToMerge, _numRowsToKeep);
+  }
+
+  @Override
+  protected SelectionResultsBlock convertToMergeableBlock(SelectionResultsBlock resultsBlock) {
+    // This may create a copy or return the same instance. Anyway, this operator is the owner of the
+    // value now, so it can mutate it.
+    return resultsBlock.convertToPriorityQueueBased();
   }
 
   private static class MinMaxValueContext {

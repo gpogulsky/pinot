@@ -26,6 +26,7 @@ import {
   makeStyles,
   useTheme,
 } from '@material-ui/core/styles';
+import ComponentLoader from './ComponentLoader';
 import Dialog from '@material-ui/core/Dialog';
 import Table from '@material-ui/core/Table';
 import TableBody from '@material-ui/core/TableBody';
@@ -34,7 +35,7 @@ import TableContainer from '@material-ui/core/TableContainer';
 import TableHead from '@material-ui/core/TableHead';
 import TableRow from '@material-ui/core/TableRow';
 import { TablePagination, Tooltip } from '@material-ui/core';
-import { TableData } from 'Models';
+import {TableData, TableSortFunction} from 'Models';
 import IconButton from '@material-ui/core/IconButton';
 import FirstPageIcon from '@material-ui/icons/FirstPage';
 import KeyboardArrowLeft from '@material-ui/icons/KeyboardArrowLeft';
@@ -46,6 +47,7 @@ import { Link } from 'react-router-dom';
 import Chip from '@material-ui/core/Chip';
 import { get, has, orderBy } from 'lodash';
 import app_state from '../app_state';
+import { sortBytes, sortNumberOfSegments } from '../utils/SortFunctions'
 import Utils from '../utils/Utils';
 import TableToolbar from './TableToolbar';
 import SimpleAccordion from './SimpleAccordion';
@@ -53,9 +55,8 @@ import SimpleAccordion from './SimpleAccordion';
 type Props = {
   title?: string,
   data: TableData,
-  noOfRows?: number,
+  defaultRowsPerPage?: number,
   addLinks?: boolean,
-  isPagination?: boolean,
   cellClickCallback?: Function,
   isCellClickable?: boolean,
   highlightBackground?: boolean,
@@ -72,6 +73,15 @@ type Props = {
   },
   tooltipData?: string[]
 };
+
+// These sort functions are applied to any columns with these names. Otherwise, we just
+// sort on the raw data. Ideally users of this class would pass in custom sort functions
+// for their columns, but this pattern already existed, so we're at least making the
+// improvement to pull this out to a common variable.
+let staticSortFunctions: Map<string, TableSortFunction> = new Map()
+staticSortFunctions.set("Number of Segments", sortNumberOfSegments);
+staticSortFunctions.set("Estimated Size", sortBytes);
+staticSortFunctions.set("Reported Size", sortBytes);
 
 const StyledTableRow = withStyles((theme) =>
   createStyles({
@@ -257,9 +267,8 @@ TablePaginationActions.propTypes = {
 export default function CustomizedTables({
   title,
   data,
-  noOfRows,
+  defaultRowsPerPage,
   addLinks,
-  isPagination,
   cellClickCallback,
   isCellClickable,
   highlightBackground,
@@ -272,13 +281,28 @@ export default function CustomizedTables({
   accordionToggleObject,
   tooltipData
 }: Props) {
+  // Separate the initial and final data into two separte state variables.
+  // This way we can filter and sort the data without affecting the original data.
+  // If the component receives new data, we can simply set the new data to the initial data,
+  // and the filters and sorts will be applied to the new data.
+  const [initialData, setInitialData] = React.useState(data);
   const [finalData, setFinalData] = React.useState(Utils.tableFormat(data));
+  React.useEffect( () => {
+    setInitialData(data);
+  }, [data]);
+  // We do not use data.isLoading directly in the renderer because there's a gap between data
+  // changing and finalData being set. Without this, there's a flicker where we go from
+  // loading -> no records found -> not loading + data.
+  const [isLoading, setIsLoading] = React.useState(false);
+  React.useEffect( () => {
+    setIsLoading(data.isLoading || false);
+  }, [finalData]);
 
   const [order, setOrder] = React.useState(false);
   const [columnClicked, setColumnClicked] = React.useState('');
 
   const classes = useStyles();
-  const [rowsPerPage, setRowsPerPage] = React.useState(noOfRows || 10);
+  const [rowsPerPage, setRowsPerPage] = React.useState(defaultRowsPerPage || 10);
   const [page, setPage] = React.useState(0);
 
   const handleChangeRowsPerPage = (
@@ -298,9 +322,9 @@ export default function CustomizedTables({
 
   const filterSearchResults = React.useCallback((str: string) => {
     if (str === '') {
-      setFinalData(finalData);
+      setFinalData(Utils.tableFormat(data));
     } else {
-      const filteredRescords = data.records.filter((record) => {
+      const filteredRescords = initialData.records.filter((record) => {
         const searchFound = record.find(
           (cell) => cell.toString().toLowerCase().indexOf(str) > -1
         );
@@ -311,7 +335,7 @@ export default function CustomizedTables({
       });
       setFinalData(filteredRescords);
     }
-  }, [data, setFinalData]);
+  }, [initialData, setFinalData]);
 
   React.useEffect(() => {
     clearTimeout(timeoutId.current);
@@ -323,10 +347,6 @@ export default function CustomizedTables({
       clearTimeout(timeoutId.current);
     };
   }, [search, timeoutId, filterSearchResults]);
-
-  React.useCallback(()=>{
-    setFinalData(Utils.tableFormat(data));
-  }, [data]);
 
   const styleCell = (str: string) => {
     if (str === 'Good' || str.toLowerCase() === 'online' || str.toLowerCase() === 'alive' || str.toLowerCase() === 'true') {
@@ -383,6 +403,11 @@ export default function CustomizedTables({
 
   const makeCell = (cellData, rowIndex) => {
     if (Object.prototype.toString.call(cellData) === '[object Object]') {
+      // render custom table cell
+      if (cellData && cellData.customRenderer) {
+        return <>{cellData.customRenderer}</>;
+      }
+
       if (has(cellData, 'component') && cellData.component) {
 
 
@@ -444,19 +469,14 @@ export default function CustomizedTables({
           <Table className={classes.table} size="small" stickyHeader={isSticky}>
             <TableHead>
               <TableRow>
-                {data.columns.map((column, index) => (
+                {data.columns && data.columns.map((column, index) => (
                   <StyledTableCell
                     className={classes.head}
                     key={index}
                     onClick={() => {
-                      if(column === 'Number of Segments'){
-                        const data = finalData.sort((a,b)=>{
-                          const aSegmentInt = parseInt(a[column+app_state.columnNameSeparator+index]);
-                          const bSegmentInt = parseInt(b[column+app_state.columnNameSeparator+index]);
-                          const result = order ? (aSegmentInt > bSegmentInt) : (aSegmentInt < bSegmentInt);
-                          return result ? 1 : -1;
-                        });
-                        setFinalData(data);
+                      if (staticSortFunctions.has(column)) {
+                        finalData.sort((a, b) => staticSortFunctions.get(column)(a, b, column, index, order));
+                        setFinalData(finalData);
                       } else {
                         setFinalData(orderBy(finalData, column+app_state.columnNameSeparator+index, order ? 'asc' : 'desc'));
                       }
@@ -488,7 +508,8 @@ export default function CustomizedTables({
               </TableRow>
             </TableHead>
             <TableBody className={classes.body}>
-              {finalData.length === 0 ? (
+              {isLoading ? <ComponentLoader /> : (
+                finalData.length === 0 ? (
                 <TableRow>
                   <StyledTableCell
                     className={classes.nodata}
@@ -525,11 +546,11 @@ export default function CustomizedTables({
                       })}
                     </StyledTableRow>
                   ))
-              )}
+              ))}
             </TableBody>
           </Table>
         </TableContainer>
-        {isPagination && finalData.length > 10 ? (
+        {finalData.length > 10 ? (
           <TablePagination
             rowsPerPageOptions={[5, 10, 25]}
             component="div"

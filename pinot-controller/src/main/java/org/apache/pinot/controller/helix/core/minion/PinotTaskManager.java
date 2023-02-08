@@ -83,6 +83,8 @@ public class PinotTaskManager extends ControllerPeriodicTask<Void> {
   private static final Logger LOGGER = LoggerFactory.getLogger(PinotTaskManager.class);
 
   public final static String PINOT_TASK_MANAGER_KEY = "PinotTaskManager";
+  public final static String SKIP_LATE_CRON_SCHEDULE = "SkipLateCronSchedule";
+  public final static String MAX_CRON_SCHEDULE_DELAY_IN_SECONDS = "MaxCronScheduleDelayInSeconds";
   public final static String LEAD_CONTROLLER_MANAGER_KEY = "LeadControllerManager";
   public final static String SCHEDULE_KEY = "schedule";
 
@@ -96,6 +98,8 @@ public class PinotTaskManager extends ControllerPeriodicTask<Void> {
 
   // For cron-based scheduling
   private final Scheduler _scheduler;
+  private final boolean _skipLateCronSchedule;
+  private final int _maxCronScheduleDelayInSeconds;
   private final Map<String, Map<String, String>> _tableTaskTypeToCronExpressionMap = new ConcurrentHashMap<>();
   private final Map<String, TableTaskSchedulerUpdater> _tableTaskSchedulerUpdaterMap = new ConcurrentHashMap<>();
 
@@ -120,7 +124,8 @@ public class PinotTaskManager extends ControllerPeriodicTask<Void> {
         new ClusterInfoAccessor(helixResourceManager, helixTaskResourceManager, controllerConf, controllerMetrics,
             leadControllerManager);
     _taskGeneratorRegistry = new TaskGeneratorRegistry(_clusterInfoAccessor);
-
+    _skipLateCronSchedule = controllerConf.isSkipLateCronSchedule();
+    _maxCronScheduleDelayInSeconds = controllerConf.getMaxCronScheduleDelayInSeconds();
     if (controllerConf.isPinotTaskManagerSchedulerEnabled()) {
       try {
         _scheduler = new StdSchedulerFactory().getScheduler();
@@ -412,6 +417,8 @@ public class PinotTaskManager extends ControllerPeriodicTask<Void> {
       JobDataMap jobDataMap = new JobDataMap();
       jobDataMap.put(PINOT_TASK_MANAGER_KEY, this);
       jobDataMap.put(LEAD_CONTROLLER_MANAGER_KEY, _leadControllerManager);
+      jobDataMap.put(SKIP_LATE_CRON_SCHEDULE, _skipLateCronSchedule);
+      jobDataMap.put(MAX_CRON_SCHEDULE_DELAY_IN_SECONDS, _maxCronScheduleDelayInSeconds);
       JobDetail jobDetail =
           JobBuilder.newJob(CronJobScheduleJob.class).withIdentity(tableWithType, taskType).setJobData(jobDataMap)
               .build();
@@ -534,20 +541,35 @@ public class PinotTaskManager extends ControllerPeriodicTask<Void> {
         generateTasks() return a list of TaskGeneratorMostRecentRunInfo for each table
        */
       pinotTaskConfigs = taskGenerator.generateTasks(enabledTableConfigs);
+      long successRunTimestamp = System.currentTimeMillis();
       for (TableConfig tableConfig : enabledTableConfigs) {
         _taskManagerStatusCache.saveTaskGeneratorInfo(tableConfig.getTableName(), taskGenerator.getTaskType(),
-            taskGeneratorMostRecentRunInfo -> taskGeneratorMostRecentRunInfo.addSuccessRunTs(
-                System.currentTimeMillis()));
+            taskGeneratorMostRecentRunInfo -> taskGeneratorMostRecentRunInfo.addSuccessRunTs(successRunTimestamp));
+        // before the first task schedule, the follow two gauge metrics will be empty
+        // TODO: find a better way to report task generation information
+        _controllerMetrics.addOrUpdateGauge(
+            ControllerGauge.TIME_MS_SINCE_LAST_SUCCESSFUL_MINION_TASK_GENERATION.getGaugeName() + "."
+                + tableConfig.getTableName() + "." + taskGenerator.getTaskType(),
+            () -> System.currentTimeMillis() - successRunTimestamp);
+        _controllerMetrics.addOrUpdateGauge(
+            ControllerGauge.LAST_MINION_TASK_GENERATION_ENCOUNTERS_ERROR.getGaugeName() + "."
+                + tableConfig.getTableName() + "." + taskGenerator.getTaskType(), () -> 0L);
       }
     } catch (Exception e) {
       StringWriter errors = new StringWriter();
       try (PrintWriter pw = new PrintWriter(errors)) {
         e.printStackTrace(pw);
       }
+      long successRunTimestamp = System.currentTimeMillis();
       for (TableConfig tableConfig : enabledTableConfigs) {
         _taskManagerStatusCache.saveTaskGeneratorInfo(tableConfig.getTableName(), taskGenerator.getTaskType(),
             taskGeneratorMostRecentRunInfo -> taskGeneratorMostRecentRunInfo.addErrorRunMessage(
-                System.currentTimeMillis(), errors.toString()));
+                successRunTimestamp, errors.toString()));
+        // before the first task schedule, the follow gauge metric will be empty
+        // TODO: find a better way to report task generation information
+        _controllerMetrics.addOrUpdateGauge(
+            ControllerGauge.LAST_MINION_TASK_GENERATION_ENCOUNTERS_ERROR.getGaugeName() + "."
+                + tableConfig.getTableName() + "." + taskGenerator.getTaskType(), () -> 1L);
       }
       throw e;
     }
@@ -570,7 +592,6 @@ public class PinotTaskManager extends ControllerPeriodicTask<Void> {
    * Public API to schedule tasks (all task types) for the given table. It might be called from the non-leader
    * controller. Returns a map from the task type to the task scheduled.
    */
-  @Nullable
   public synchronized Map<String, String> scheduleTasks(String tableNameWithType) {
     return scheduleTasks(Collections.singletonList(tableNameWithType), false);
   }

@@ -18,53 +18,46 @@
  */
 package org.apache.pinot.server.starter.helix;
 
-import java.io.File;
-import org.apache.commons.configuration.ConfigurationException;
-import org.apache.commons.io.FileUtils;
-import org.apache.helix.HelixManager;
-import org.apache.pinot.common.metrics.ServerMetrics;
-import org.apache.pinot.segment.local.data.manager.SegmentDataManager;
-import org.apache.pinot.segment.spi.ImmutableSegment;
-import org.apache.pinot.segment.spi.MutableSegment;
-import org.apache.pinot.spi.env.PinotConfiguration;
-import org.testng.annotations.AfterMethod;
+import org.apache.pinot.common.metadata.segment.SegmentZKMetadata;
+import org.apache.pinot.spi.config.table.TableConfig;
+import org.apache.pinot.spi.config.table.TableType;
+import org.apache.pinot.spi.data.DateTimeFieldSpec;
+import org.apache.pinot.spi.data.FieldSpec.DataType;
+import org.apache.pinot.spi.data.Schema;
+import org.apache.pinot.spi.utils.builder.TableConfigBuilder;
+import org.joda.time.DateTimeZone;
+import org.joda.time.format.DateTimeFormat;
 import org.testng.annotations.Test;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
-import static org.testng.Assert.assertFalse;
-import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNotNull;
 
 
 public class HelixInstanceDataManagerTest {
-  private static final File TEMP_DIR = new File(FileUtils.getTempDirectory(), "HelixInstanceDataManagerTest");
-
-  @AfterMethod
-  public void tearDown()
-      throws Exception {
-    FileUtils.deleteDirectory(TEMP_DIR);
-  }
 
   @Test
-  public void testReloadMutableSegment()
-      throws ConfigurationException {
-    // Provides required configs to init the instance data manager.
-    PinotConfiguration config = new PinotConfiguration();
-    config.setProperty("id", "id01");
-    config.setProperty("dataDir", TEMP_DIR.getAbsolutePath());
-    config.setProperty("segmentTarDir", TEMP_DIR.getAbsolutePath());
-    config.setProperty("readMode", "mmap");
-    config.setProperty("reload.consumingSegment", "false");
+  public void testSetDefaultTimeValueIfInvalid() {
+    SegmentZKMetadata segmentZKMetadata = mock(SegmentZKMetadata.class);
+    long currentTimeMs = System.currentTimeMillis();
+    when(segmentZKMetadata.getCreationTime()).thenReturn(currentTimeMs);
 
-    HelixInstanceDataManager mgr = new HelixInstanceDataManager();
-    mgr.init(config, mock(HelixManager.class), mock(ServerMetrics.class));
+    TableConfig tableConfig =
+        new TableConfigBuilder(TableType.OFFLINE).setTableName("testTable").setTimeColumnName("timeColumn").build();
+    Schema schema = new Schema.SchemaBuilder().setSchemaName("testTable")
+        .addDateTime("timeColumn", DataType.TIMESTAMP, "TIMESTAMP", "1:MILLISECONDS").build();
+    HelixInstanceDataManager.setDefaultTimeValueIfInvalid(tableConfig, schema, segmentZKMetadata);
+    DateTimeFieldSpec timeFieldSpec = schema.getSpecForTimeColumn("timeColumn");
+    assertNotNull(timeFieldSpec);
+    assertEquals(timeFieldSpec.getDefaultNullValue(), currentTimeMs);
 
-    SegmentDataManager segMgr = mock(SegmentDataManager.class);
-
-    when(segMgr.getSegment()).thenReturn(mock(ImmutableSegment.class));
-    assertFalse(mgr.reloadMutableSegment("table01", "seg01", segMgr, null));
-
-    when(segMgr.getSegment()).thenReturn(mock(MutableSegment.class));
-    assertTrue(mgr.reloadMutableSegment("table01", "seg01", segMgr, null));
+    schema = new Schema.SchemaBuilder().setSchemaName("testTable")
+        .addDateTime("timeColumn", DataType.INT, "SIMPLE_DATE_FORMAT|yyyyMMdd", "1:DAYS").build();
+    HelixInstanceDataManager.setDefaultTimeValueIfInvalid(tableConfig, schema, segmentZKMetadata);
+    timeFieldSpec = schema.getSpecForTimeColumn("timeColumn");
+    assertNotNull(timeFieldSpec);
+    assertEquals(timeFieldSpec.getDefaultNullValue(),
+        Integer.parseInt(DateTimeFormat.forPattern("yyyyMMdd").withZone(DateTimeZone.UTC).print(currentTimeMs)));
   }
 }

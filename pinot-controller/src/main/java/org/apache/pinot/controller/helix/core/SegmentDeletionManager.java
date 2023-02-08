@@ -180,6 +180,9 @@ public class SegmentDeletionManager {
       }
       segmentsToDelete.removeAll(propStoreFailedSegs);
 
+      // TODO: If removing segments from deep store fails (e.g. controller crashes, deep store unavailable), these
+      //       segments will become orphans and not easy to track because their ZK metadata are already deleted.
+      //       Consider removing segments from deep store before cleaning up the ZK metadata.
       removeSegmentsFromStore(tableName, segmentsToDelete, deletedSegmentsRetentionMs);
     }
 
@@ -190,7 +193,6 @@ public class SegmentDeletionManager {
       long effectiveDeletionDelay = Math.min(deletionDelay * 2, MAX_DELETION_DELAY_SECONDS);
       LOGGER.info("Postponing deletion of {} segments from table {}", segmentsToRetryLater.size(), tableName);
       deleteSegmentsWithDelay(tableName, segmentsToRetryLater, deletedSegmentsRetentionMs, effectiveDeletionDelay);
-      return;
     }
   }
 

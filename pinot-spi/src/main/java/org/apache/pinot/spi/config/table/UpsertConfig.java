@@ -36,7 +36,7 @@ public class UpsertConfig extends BaseJsonConfig {
 
   public enum Strategy {
     // Todo: add CUSTOM strategies
-    APPEND, IGNORE, INCREMENT, OVERWRITE, UNION
+    APPEND, IGNORE, INCREMENT, MAX, MIN, OVERWRITE, UNION
   }
 
   @JsonPropertyDescription("Upsert mode.")
@@ -53,6 +53,9 @@ public class UpsertConfig extends BaseJsonConfig {
 
   @JsonPropertyDescription("Column for upsert comparison, default to time column")
   private String _comparisonColumn;
+
+  @JsonPropertyDescription("Whether to use snapshot for fast upsert metadata recovery")
+  private boolean _enableSnapshot;
 
   @JsonPropertyDescription("Custom class for upsert metadata manager")
   private String _metadataManagerClass;
@@ -111,6 +114,10 @@ public class UpsertConfig extends BaseJsonConfig {
     return _comparisonColumn;
   }
 
+  public boolean isEnableSnapshot() {
+    return _enableSnapshot;
+  }
+
   @Nullable
   public String getMetadataManagerClass() {
     return _metadataManagerClass;
@@ -151,6 +158,10 @@ public class UpsertConfig extends BaseJsonConfig {
    */
   public void setComparisonColumn(String comparisonColumn) {
     _comparisonColumn = comparisonColumn;
+  }
+
+  public void setEnableSnapshot(boolean enableSnapshot) {
+    _enableSnapshot = enableSnapshot;
   }
 
   public void setMetadataManagerClass(String metadataManagerClass) {

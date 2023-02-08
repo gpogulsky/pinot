@@ -37,8 +37,8 @@ public class PinotQueryRuleSets {
           EnumerableRules.ENUMERABLE_PROJECT_RULE, EnumerableRules.ENUMERABLE_SORT_RULE,
           EnumerableRules.ENUMERABLE_TABLE_SCAN_RULE,
 
-          // push a filter into a join, replaced CoreRules.FILTER_INTO_JOIN with special config
-          PinotFilterIntoJoinRule.INSTANCE,
+          // push a filter into a join
+          CoreRules.FILTER_INTO_JOIN,
           // push filter through an aggregation
           CoreRules.FILTER_AGGREGATE_TRANSPOSE,
           // push filter through set operation
@@ -59,8 +59,14 @@ public class PinotQueryRuleSets {
           CoreRules.PROJECT_MERGE,
           // remove identity project
           CoreRules.PROJECT_REMOVE,
+          // add an extra exchange for sort
+          PinotSortExchangeNodeInsertRule.INSTANCE,
+          // copy exchanges down
+          PinotSortExchangeCopyRule.SORT_EXCHANGE_COPY,
           // reorder sort and projection
           CoreRules.SORT_PROJECT_TRANSPOSE,
+
+          // TODO: evaluate the SORT_JOIN_TRANSPOSE and SORT_JOIN_COPY rules
 
           // join rules
           CoreRules.JOIN_PUSH_EXPRESSIONS,
@@ -87,8 +93,8 @@ public class PinotQueryRuleSets {
           PruneEmptyRules.UNION_INSTANCE,
 
           // Pinot specific rules
+          PinotFilterExpandSearchRule.INSTANCE,
           PinotJoinExchangeNodeInsertRule.INSTANCE,
-          PinotAggregateExchangeNodeInsertRule.INSTANCE,
-          PinotLogicalSortFetchEliminationRule.INSTANCE
+          PinotAggregateExchangeNodeInsertRule.INSTANCE
       );
 }

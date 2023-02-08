@@ -21,16 +21,17 @@ package org.apache.pinot.core.operator.blocks.results;
 import it.unimi.dsi.fastutil.doubles.DoubleArrayList;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
+import org.apache.pinot.common.datatable.DataTable;
 import org.apache.pinot.common.utils.DataSchema;
 import org.apache.pinot.common.utils.DataSchema.ColumnDataType;
-import org.apache.pinot.common.utils.DataTable;
 import org.apache.pinot.core.common.datatable.DataTableBuilder;
-import org.apache.pinot.core.common.datatable.DataTableFactory;
+import org.apache.pinot.core.common.datatable.DataTableBuilderFactory;
 import org.apache.pinot.core.query.aggregation.function.AggregationFunction;
 import org.apache.pinot.core.query.request.context.QueryContext;
 import org.apache.pinot.spi.utils.ByteArray;
-import org.apache.pinot.spi.utils.NullValueUtils;
 import org.roaringbitmap.RoaringBitmap;
 
 
@@ -56,11 +57,13 @@ public class AggregationResultsBlock extends BaseResultsBlock {
   }
 
   @Override
-  public DataTable getDataTable(QueryContext queryContext)
-      throws Exception {
-    boolean returnFinalResult = queryContext.isServerReturnFinalResult();
+  public int getNumRows() {
+    return 1;
+  }
 
-    // Extract result column name and type from each aggregation function
+  @Override
+  public DataSchema getDataSchema(QueryContext queryContext) {
+    boolean returnFinalResult = queryContext.isServerReturnFinalResult();
     int numColumns = _aggregationFunctions.length;
     String[] columnNames = new String[numColumns];
     ColumnDataType[] columnDataTypes = new ColumnDataType[numColumns];
@@ -70,10 +73,23 @@ public class AggregationResultsBlock extends BaseResultsBlock {
       columnDataTypes[i] = returnFinalResult ? aggregationFunction.getFinalResultColumnType()
           : aggregationFunction.getIntermediateResultColumnType();
     }
+    return new DataSchema(columnNames, columnDataTypes);
+  }
 
-    // Build the data table.
-    DataTableBuilder dataTableBuilder =
-        DataTableFactory.getDataTableBuilder(new DataSchema(columnNames, columnDataTypes));
+  @Override
+  public Collection<Object[]> getRows(QueryContext queryContext) {
+    return Collections.singletonList(_results.toArray());
+  }
+
+  @Override
+  public DataTable getDataTable(QueryContext queryContext)
+      throws IOException {
+    boolean returnFinalResult = queryContext.isServerReturnFinalResult();
+    DataSchema dataSchema = getDataSchema(queryContext);
+    assert dataSchema != null;
+    ColumnDataType[] columnDataTypes = dataSchema.getColumnDataTypes();
+    int numColumns = columnDataTypes.length;
+    DataTableBuilder dataTableBuilder = DataTableBuilderFactory.getDataTableBuilder(dataSchema);
     if (queryContext.isNullHandlingEnabled()) {
       RoaringBitmap[] nullBitmaps = new RoaringBitmap[numColumns];
       for (int i = 0; i < numColumns; i++) {
@@ -82,18 +98,13 @@ public class AggregationResultsBlock extends BaseResultsBlock {
       dataTableBuilder.startRow();
       for (int i = 0; i < numColumns; i++) {
         Object result = _results.get(i);
+        if (result == null) {
+          result = columnDataTypes[i].getNullPlaceholder();
+          nullBitmaps[i].add(0);
+        }
         if (!returnFinalResult) {
-          if (result == null && columnDataTypes[i] != ColumnDataType.OBJECT) {
-            result = NullValueUtils.getDefaultNullValue(columnDataTypes[i].toDataType());
-            nullBitmaps[i].add(0);
-          }
           setIntermediateResult(dataTableBuilder, columnDataTypes, i, result);
         } else {
-          result = _aggregationFunctions[i].extractFinalResult(result);
-          if (result == null) {
-            result = NullValueUtils.getDefaultNullValue(columnDataTypes[i].toDataType());
-            nullBitmaps[i].add(0);
-          }
           setFinalResult(dataTableBuilder, columnDataTypes, i, result);
         }
       }
@@ -114,10 +125,7 @@ public class AggregationResultsBlock extends BaseResultsBlock {
       }
       dataTableBuilder.finishRow();
     }
-
-    DataTable dataTable = dataTableBuilder.build();
-    attachMetadataToDataTable(dataTable);
-    return dataTable;
+    return dataTableBuilder.build();
   }
 
   private void setIntermediateResult(DataTableBuilder dataTableBuilder, ColumnDataType[] columnDataTypes, int index,
